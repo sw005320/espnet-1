@@ -177,12 +177,12 @@ and also follows <a class="reference external" href="http://kaldi-asr.org/">Kald
 <div class="section" id="installation">
 <span id="installation"></span><h1>Installation<a class="headerlink" href="#installation" title="Permalink to this headline">¶</a></h1>
 <p>Install Kaldi, Python libraries and other required tools</p>
-<div class="highlight-sh"><div class="highlight"><pre><span></span>$ <span class="nb">cd</span> tools
-$ make -j
+<div class="highlight-sh"><div class="highlight"><pre><span class="nv">$ </span><span class="nb">cd </span>tools
+<span class="nv">$ </span>make -j
 </pre></div>
 </div>
 <p>To use cuda (and cudnn), make sure to set paths in your <code class="docutils literal"><span class="pre">.bashrc</span></code> or <code class="docutils literal"><span class="pre">.bash_profile</span></code> appropriately.</p>
-<div class="highlight-default"><div class="highlight"><pre><span></span>CUDAROOT=/path/to/cuda
+<div class="highlight-default"><div class="highlight"><pre>CUDAROOT=/path/to/cuda
 
 export PATH=$CUDAROOT/bin:$PATH
 export LD_LIBRARY_PATH=$CUDAROOT/lib64:$LD_LIBRARY_PATH
@@ -196,11 +196,11 @@ export CUDA_PATH=$CUDAROOT
 <p>Move to an example directory under the <code class="docutils literal"><span class="pre">egs</span></code> directory.
 We prepare several major ASR benchmarks including WSJ, CHiME-4, and TED.
 The following directory is an example of performing ASR experiment with the VoxForge Italian Corpus.</p>
-<div class="highlight-sh"><div class="highlight"><pre><span></span>$ <span class="nb">cd</span> egs/voxforge/asr1
+<div class="highlight-sh"><div class="highlight"><pre><span class="nv">$ </span><span class="nb">cd </span>egs/voxforge/asr1
 </pre></div>
 </div>
 <p>Once move to the directory, then, execute the following main script:</p>
-<div class="highlight-sh"><div class="highlight"><pre><span></span>$ ./run.sh
+<div class="highlight-sh"><div class="highlight"><pre><span class="nv">$ </span>./run.sh
 </pre></div>
 </div>
 <p>With this main script, you can perform a full procedure of ASR experiments including</p>
@@ -215,7 +215,7 @@ The following directory is an example of performing ASR experiment with the VoxF
 <div class="section" id="use-of-gpu">
 <span id="use-of-gpu"></span><h2>Use of GPU<a class="headerlink" href="#use-of-gpu" title="Permalink to this headline">¶</a></h2>
 <p>If you use GPU in your experiment, set <code class="docutils literal"><span class="pre">--gpu</span></code> option in <code class="docutils literal"><span class="pre">run.sh</span></code> appropriately, e.g.,</p>
-<div class="highlight-sh"><div class="highlight"><pre><span></span>$ ./run.sh --gpu <span class="m">0</span>
+<div class="highlight-sh"><div class="highlight"><pre><span class="nv">$ </span>./run.sh --gpu 0
 </pre></div>
 </div>
 <p>Default setup uses CPU (<code class="docutils literal"><span class="pre">--gpu</span> <span class="pre">-1</span></code>).</p>
@@ -232,8 +232,8 @@ It supports Grid Engine (<code class="docutils literal"><span class="pre">queue.
 <span id="installation-using-docker"></span><h1>Installation using Docker<a class="headerlink" href="#installation-using-docker" title="Permalink to this headline">¶</a></h1>
 <p>For GPU support nvidia-docker should be installed.</p>
 <p>For Execution use the command</p>
-<div class="highlight-sh"><div class="highlight"><pre><span></span>$ <span class="nb">cd</span> egs/voxforge/asr1
-$ ./run_in_docker.sh --gpu GPUID
+<div class="highlight-sh"><div class="highlight"><pre><span class="nv">$ </span><span class="nb">cd </span>egs/voxforge/asr1
+<span class="nv">$ </span>./run_in_docker.sh --gpu GPUID
 </pre></div>
 </div>
 <p>If GPUID is set to -1, the program will run only CPU.</p>

@@ -166,18 +166,46 @@
 <span id="espnet-document-generation"></span><h1>ESPnet document generation<a class="headerlink" href="#espnet-document-generation" title="Permalink to this headline">¶</a></h1>
 <div class="section" id="install">
 <span id="install"></span><h2>Install<a class="headerlink" href="#install" title="Permalink to this headline">¶</a></h2>
-<div class="highlight-sh"><div class="highlight"><pre><span></span>$ pip install sphinx
-$ pip install sphinx_rtd_theme
-$ pip install <span class="nv">commonmark</span><span class="o">==</span><span class="m">0</span>.5.4 recommonmark
+<div class="highlight-sh"><div class="highlight"><pre><span class="nv">$ </span>pip install sphinx
+<span class="nv">$ </span>pip install sphinx_rtd_theme
+<span class="nv">$ </span>pip install <span class="nv">commonmark</span><span class="o">==</span>0.5.4 recommonmark
 </pre></div>
 </div>
 </div>
 <div class="section" id="compile">
 <span id="compile"></span><h2>Compile<a class="headerlink" href="#compile" title="Permalink to this headline">¶</a></h2>
-<div class="highlight-sh"><div class="highlight"><pre><span></span>$ make html
+<div class="highlight-sh"><div class="highlight"><pre><span class="nv">$ </span>make html
 </pre></div>
 </div>
 <p><code class="docutils literal"><span class="pre">index.html</span></code> will be created at <code class="docutils literal"><span class="pre">_build/html/index.html</span></code></p>
+</div>
+<div class="section" id="publish">
+<span id="publish"></span><h2>Publish<a class="headerlink" href="#publish" title="Permalink to this headline">¶</a></h2>
+<div class="highlight-sh"><div class="highlight"><pre><span class="c"># &lt;origin&gt;: your fork repository</span>
+<span class="c"># &lt;upstream&gt;: original repository</span>
+
+<span class="c"># better to make new clone</span>
+<span class="nv">$ </span>git clone &lt;origin&gt; espnet_doc
+<span class="nv">$ </span><span class="nb">cd </span>espnet_doc
+
+<span class="c"># get changes from upstream master</span>
+<span class="nv">$ </span>git fetch &lt;upstream&gt;
+<span class="nv">$ </span>git merge &lt;upstream&gt;/master
+
+<span class="c"># compile html</span>
+<span class="nv">$ </span><span class="nb">cd </span>doc
+<span class="nv">$ </span>make html
+
+<span class="c"># upload html to github.io</span>
+<span class="nv">$ </span>git checkout gh-pages
+<span class="nv">$ </span>cp -r doc/_build/html/* .
+<span class="nv">$ </span>git add *.html *.js *.inv _sources _static apis
+<span class="nv">$ </span>git commit 
+<span class="nv">$ </span>git push &lt;origin&gt; gh-pages
+
+<span class="c"># make pull request!</span>
+</pre></div>
+</div>
 </div>
 </div>
 
