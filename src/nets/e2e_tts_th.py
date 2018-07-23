@@ -131,7 +131,7 @@ class Tacotron2Loss(torch.nn.Module):
         self.bce_pos_weight = bce_pos_weight
         self.reporter = Reporter()
 
-    def forward(self, xs, ilens, ys, labels, olens=None):
+    def forward(self, xs, ilens, ys, labels, olens=None, do_report=True):
         """TACOTRON2 LOSS FORWARD CALCULATION
 
         :param torch.Tensor xs: batch of padded character ids (B, Tmax)
@@ -188,7 +188,8 @@ class Tacotron2Loss(torch.nn.Module):
         mse_loss_data = mse_loss.data[0] if torch_is_old else mse_loss.item()
         logging.debug("loss = %.3e (bce: %.3e, l1: %.3e, mse: %.3e)" % (
             loss_data, bce_loss_data, l1_loss_data, mse_loss_data))
-        self.reporter.report(l1_loss_data, mse_loss_data, bce_loss_data, loss_data)
+        if do_report:
+            self.reporter.report(l1_loss_data, mse_loss_data, bce_loss_data, loss_data)
 
         return loss
 

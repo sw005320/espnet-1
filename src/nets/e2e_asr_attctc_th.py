@@ -110,7 +110,7 @@ class Loss(torch.nn.Module):
         self.predictor = predictor
         self.reporter = Reporter()
 
-    def forward(self, x):
+    def forward(self, x, do_report=True, report_acc=False):
         '''Loss forward
 
         :param x:
@@ -134,11 +134,15 @@ class Loss(torch.nn.Module):
 
         loss_data = self.loss.data[0] if torch_is_old else float(self.loss)
         if loss_data < CTC_LOSS_THRESHOLD and not math.isnan(loss_data):
-            self.reporter.report(loss_ctc_data, loss_att_data, acc, loss_data)
+            if do_report:
+                self.reporter.report(loss_ctc_data, loss_att_data, acc, loss_data)
         else:
             logging.warning('loss (=%f) is not correct', self.loss.data)
 
-        return self.loss
+        if report_acc:
+            return self.loss, acc
+        else:
+            return self.loss
 
 
 def pad_list(xs, pad_value):
@@ -771,7 +775,7 @@ class AttLoc(torch.nn.Module):
         # initialize attention weight with uniform dist.
         if att_prev is None:
             att_prev = [Variable(enc_hs_pad.data.new(
-                l).zero_() + (1.0 / l)) for l in enc_hs_len]
+                int(l)).zero_() + (1.0 / float(l))) for l in enc_hs_len]
             # if no bias, 0 0-pad goes 0
             att_prev = pad_list(att_prev, 0)
 

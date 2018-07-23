@@ -54,22 +54,40 @@ if __name__ == '__main__':
         dic = old_dic[id]
 
         in_dic = {}
-        if dic.has_key(unicode('idim', 'utf-8')):
-            in_dic[unicode('shape', 'utf-8')] = (int(dic[unicode('ilen', 'utf-8')]), int(dic[unicode('idim', 'utf-8')]))
         in_dic[unicode('name', 'utf-8')] = unicode('input1', 'utf-8')
-        in_dic[unicode('feat', 'utf-8')] = dic[unicode('feat', 'utf-8')]
 
         out_dic = {}
         out_dic[unicode('name', 'utf-8')] = unicode('target1', 'utf-8')
-        out_dic[unicode('shape', 'utf-8')] = (int(dic[unicode('olen', 'utf-8')]), int(dic[unicode('odim', 'utf-8')]))
-        out_dic[unicode('text', 'utf-8')] = dic[unicode('text', 'utf-8')]
-        out_dic[unicode('token', 'utf-8')] = dic[unicode('token', 'utf-8')]
-        out_dic[unicode('tokenid', 'utf-8')] = dic[unicode('tokenid', 'utf-8')]
 
+        new_dic[id] = {}
 
-        new_dic[id] = {unicode('input', 'utf-8'):[in_dic], unicode('output', 'utf-8'):[out_dic],
-            unicode('utt2spk', 'utf-8'):dic[unicode('utt2spk', 'utf-8')]}
-    
+        for k in dic.keys():
+            if k == 'ilen':
+                in_dic[unicode('shape', 'utf-8')] = \
+                    (int(dic[unicode('ilen', 'utf-8')]), int(dic[unicode('idim', 'utf-8')]))
+            elif k == 'ilen':
+                pass
+            elif k == 'feat':
+                in_dic[unicode('feat', 'utf-8')] = dic[unicode('feat', 'utf-8')]
+            elif k == 'target1':
+                out_dic[unicode('name', 'utf-8')] = unicode('target1', 'utf-8')
+            elif k == 'olen':
+                out_dic[unicode('shape', 'utf-8')] = \
+                    (int(dic[unicode('olen', 'utf-8')]), int(dic[unicode('odim', 'utf-8')]))
+            elif k == 'odim':
+                pass
+            elif k == 'text':
+                out_dic[unicode('text', 'utf-8')] = dic[unicode('text', 'utf-8')]
+            elif k == 'token':
+                out_dic[unicode('token', 'utf-8')] = dic[unicode('token', 'utf-8')]
+            elif k == 'tokenid':
+                out_dic[unicode('tokenid', 'utf-8')] = dic[unicode('tokenid', 'utf-8')]
+            else:
+                new_dic[id][k] = dic[k]
+
+            new_dic[id]['input'] = [in_dic]
+            new_dic[id]['output'] = [out_dic]
+
     # ensure "ensure_ascii=False", which is a bug
     jsonstring = json.dumps({'utts': new_dic}, indent=4, ensure_ascii=False, sort_keys=True).encode('utf_8')
     print(jsonstring)
