@@ -125,6 +125,12 @@ class CustomEvaluater(extensions.Evaluator):
         return summary.compute_mean()
 
 
+def update_parameters(att, true_or_false):
+    for child in att.children():
+        for param in child.parameters():
+            param.requires_grad = true_or_false
+
+
 class CustomUpdater(training.StandardUpdater):
     '''Custom updater for pytorch'''
 
@@ -190,14 +196,17 @@ class CustomUpdater(training.StandardUpdater):
                     loss = avg_featlen * tts_loss
                     self.model.reporter.report(loss, None, tts_loss, None, None, None, None)
                 if mode == 's2s':
+                    update_parameters(self.model.tts_loss.model.dec.att, False)
                     s2s_loss = self.model.ae_speech(data)
                     loss = avg_featlen * s2s_loss
                     self.model.reporter.report(loss, None, None, s2s_loss, None, None, None)
                 if mode == 't2t':
+                    update_parameters(self.model.asr_loss.predictor.att, False)
                     t2t_loss, t2t_acc = self.model.ae_text(data)
                     loss = t2t_loss
                     self.model.reporter.report(loss, None, None, None, t2t_loss, None, t2t_acc)
                 self.gradient_decent(loss, optimizer)
+                update_parameters(self.model.asr_loss.predictor.att, True)
                 logging.info("loss: %f", loss[0].data[0] if torch_is_old else loss[0].item())
         elif data[0][1]['utt2mode'] == 'a':
             logging.info("audio only mode")

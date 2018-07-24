@@ -106,7 +106,7 @@ recog_model=acc.best # set a model to be used for decoding: 'acc.best' or 'loss.
 # Set this to somewhere where you want to put your data, or where
 # someone else has already put it.  You'll want to change this
 # if you're not on the CLSP grid.
-datadir=/export/a15/vpanayotov/data
+datadir=/home/ubuntu/work/201707e2e/data/librispeech
 
 # base url for downloads.
 data_url=www.openslr.org/resources/12
@@ -325,7 +325,7 @@ if [ ${stage} -le 4 ]; then
         --minibatches ${N} \
         --verbose ${verbose} \
         --resume ${resume} \
-        --train-json ${feat_tr_dir}/data.json \
+        --train-json ${feat_tr_dir}/data_p.json \
         --valid-json ${feat_dt_dir}/data.json \
         --etype ${etype} \
         --elayers ${elayers} \
