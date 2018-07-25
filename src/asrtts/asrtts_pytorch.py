@@ -34,6 +34,7 @@ from asr_utils import make_batchset
 from asr_utils import PlotAttentionReport
 from asr_utils import restore_snapshot
 
+from tts_pytorch import CustomConverter
 
 from e2e_asr_attctc_th import E2E
 from e2e_asr_attctc_th import Loss
@@ -79,6 +80,8 @@ class CustomEvaluater(extensions.Evaluator):
 
         summary = reporter_module.DictSummary()
 
+        if not torch_is_old:
+            torch.set_grad_enabled(False)
         for batch in it:
             observation = {}
             with reporter_module.report_scope(observation):
@@ -87,39 +90,35 @@ class CustomEvaluater(extensions.Evaluator):
                 #    will be converted to chainer variable later
                 data = self.converter(batch)
                 self.model.eval()
-
                 if data[0][1]['utt2mode'] != 'p':
                     logging.error("Error: evaluation only support a parallel data mode ('p')")
                     sys.exit()
                 tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens = get_tts_data(self.model, data, 'text')
                 avg_featlen = float(np.mean(tts_featlens.data.cpu().numpy()))
 
-                self.model.asr_loss(data, do_report=False, report_acc=True)
                 asr_loss, asr_acc = self.model.asr_loss(data, do_report=False, report_acc=True)  # disable reporter
                 loss = asr_loss
                 self.model.reporter.report(loss, asr_loss, None, None, None, asr_acc, None)
-                loss.detach()
 
                 tts_loss = self.model.tts_loss(tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens,
                                                do_report=False)
                 loss = avg_featlen * tts_loss
                 self.model.reporter.report(loss, None, tts_loss, None, None, None, None)
-                loss.detach()
 
                 s2s_loss = self.model.ae_speech(data)
                 loss = avg_featlen * s2s_loss
                 self.model.reporter.report(loss, None, None, s2s_loss, None, None, None)
-                loss.detach()
 
                 t2t_loss, t2t_acc = self.model.ae_text(data)
                 loss = t2t_loss
                 self.model.reporter.report(loss, None, None, None, t2t_loss, None, t2t_acc)
-                loss.detach()
 
                 delete_feat(data)
 
             summary.add(observation)
 
+        if not torch_is_old:
+            torch.set_grad_enabled(True)
         self.model.train()
 
         return summary.compute_mean()
@@ -196,17 +195,17 @@ class CustomUpdater(training.StandardUpdater):
                     loss = avg_featlen * tts_loss
                     self.model.reporter.report(loss, None, tts_loss, None, None, None, None)
                 if mode == 's2s':
-                    update_parameters(self.model.tts_loss.model.dec.att, False)
+                    #update_parameters(self.model.tts_loss.model.dec.att, False)
                     s2s_loss = self.model.ae_speech(data)
                     loss = avg_featlen * s2s_loss
                     self.model.reporter.report(loss, None, None, s2s_loss, None, None, None)
                 if mode == 't2t':
-                    update_parameters(self.model.asr_loss.predictor.att, False)
+                    #update_parameters(self.model.asr_loss.predictor.att, False)
                     t2t_loss, t2t_acc = self.model.ae_text(data)
                     loss = t2t_loss
                     self.model.reporter.report(loss, None, None, None, t2t_loss, None, t2t_acc)
                 self.gradient_decent(loss, optimizer)
-                update_parameters(self.model.asr_loss.predictor.att, True)
+                #update_parameters(self.model.asr_loss.predictor.att, True)
                 logging.info("loss: %f", loss[0].data[0] if torch_is_old else loss[0].item())
         elif data[0][1]['utt2mode'] == 'a':
             logging.info("audio only mode")
@@ -340,6 +339,7 @@ def train(args):
 
     # specify model architecture for ASR
     e2e_asr = E2E(idim, odim, args)
+    logging.info(e2e_asr)
     asr_loss = Loss(e2e_asr, args.mtlalpha)
 
     # define output activation function
@@ -465,13 +465,13 @@ def train(args):
         model, valid_iter, reporter, converter=converter_kaldi, device=gpu_id))
 
     # Save attention weight each epoch
-    '''
     if args.num_save_attention > 0 and args.mtlalpha != 1.0:
         data = sorted(list(valid_json.items())[:args.num_save_attention],
                       key=lambda x: int(x[1]['input'][0]['shape'][1]), reverse=True)
         data = converter_kaldi([data], device=gpu_id)
-        trainer.extend(PlotAttentionReport(model, data, args.outdir + "/att_ws"), trigger=(1, 'epoch'))
-    '''
+        trainer.extend(PlotAttentionReport(asr_loss, data, args.outdir + "/att_ws_asr"), trigger=(1, 'epoch'))
+        trainer.extend(PlotAttentionReport(e2e_tts, data, args.outdir + "/att_ws_tts",
+                                           CustomConverter(gpu_id, False), True), trigger=(1, 'epoch'))
 
     # Take a snapshot for each specified epoch
     trainer.extend(extensions.snapshot(), trigger=(1, 'epoch'))
@@ -563,8 +563,53 @@ def recog(args):
 
     # specify model architecture
     logging.info('reading model parameters from' + args.model)
-    e2e = E2E(idim, odim, train_args)
-    model = Loss(e2e, train_args.mtlalpha)
+    e2e_asr = E2E(idim, odim, train_args)
+    logging.info(e2e_asr)
+    asr_loss = Loss(e2e_asr, train_args.mtlalpha)
+
+    # define output activation function
+    if train_args.tts_output_activation is None:
+        output_activation_fn = None
+    elif hasattr(torch.nn.functional, train_args.tts_output_activation):
+        output_activation_fn = getattr(torch.nn.functional, train_args.tts_output_activation)
+    else:
+        raise ValueError('there is no such an activation function. (%s)' % train_args.tts_output_activation)
+
+    # specify model architecture for TTS
+    # reverse input and output dimension
+    e2e_tts = Tacotron2(
+        idim=odim,
+        odim=idim,
+        embed_dim=train_args.tts_embed_dim,
+        elayers=train_args.tts_elayers,
+        eunits=train_args.tts_eunits,
+        econv_layers=train_args.tts_econv_layers,
+        econv_chans=train_args.tts_econv_chans,
+        econv_filts=train_args.tts_econv_filts,
+        dlayers=train_args.tts_dlayers,
+        dunits=train_args.tts_dunits,
+        prenet_layers=train_args.tts_prenet_layers,
+        prenet_units=train_args.tts_prenet_units,
+        postnet_layers=train_args.tts_postnet_layers,
+        postnet_chans=train_args.tts_postnet_chans,
+        postnet_filts=train_args.tts_postnet_filts,
+        output_activation_fn=output_activation_fn,
+        adim=train_args.tts_adim,
+        aconv_chans=train_args.tts_aconv_chans,
+        aconv_filts=train_args.tts_aconv_filts,
+        cumulate_att_w=train_args.tts_cumulate_att_w,
+        use_batch_norm=train_args.tts_use_batch_norm,
+        use_concate=train_args.tts_use_concate,
+        dropout=train_args.tts_dropout_rate,
+        zoneout=train_args.tts_zoneout_rate)
+    logging.info(e2e_tts)
+    tts_loss = Tacotron2Loss(
+        model=e2e_tts,
+        use_masking=train_args.tts_use_masking,
+        bce_pos_weight=train_args.tts_bce_pos_weight)
+
+    # define loss
+    model = ASRTTSLoss(asr_loss, tts_loss, train_args)
 
     def cpu_loader(storage, location):
         return storage
@@ -616,7 +661,7 @@ def recog(args):
     new_json = {}
     for name in recog_json.keys():
         feat = kaldi_io_py.read_mat(recog_json[name]['input'][0]['feat'])
-        nbest_hyps = e2e.recognize(feat, args, train_args.char_list, rnnlm=rnnlm)
+        nbest_hyps = e2e_asr.recognize(feat, args, train_args.char_list, rnnlm=rnnlm)
         # get 1best and remove sos
         y_hat = nbest_hyps[0]['yseq'][1:]
         y_true = map(int, recog_json[name]['output'][0]['tokenid'].split())

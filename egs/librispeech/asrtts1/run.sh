@@ -101,7 +101,7 @@ penalty=0.0
 maxlenratio=0.0
 minlenratio=0.0
 ctc_weight=0.3
-recog_model=acc.best # set a model to be used for decoding: 'acc.best' or 'loss.best'
+recog_model=loss.best # set a model to be used for decoding: 'acc.best' or 'loss.best'
 
 # Set this to somewhere where you want to put your data, or where
 # someone else has already put it.  You'll want to change this
@@ -244,8 +244,7 @@ fi
 # You can skip this and remove --rnnlm option in the recognition (stage 5)
 lmexpdir=exp/train_rnnlm_2layer_bs256
 mkdir -p ${lmexpdir}
-#if [ ${stage} -le 3 ]; then
-if false; then
+if [ ${stage} -le 3 ]; then
     echo "stage 3: LM Preparation"
     lmdatadir=data/local/lm_train
     mkdir -p ${lmdatadir}
@@ -376,7 +375,7 @@ fi
 
 if [ ${stage} -le 5 ]; then
     echo "stage 5: Decoding"
-    nj=32
+    nj=8
 
     for rtask in ${recog_set}; do
     (
@@ -390,7 +389,7 @@ if [ ${stage} -le 5 ]; then
         ngpu=0
 
         ${decode_cmd} JOB=1:${nj} ${expdir}/${decode_dir}/log/decode.JOB.log \
-            asr_recog.py \
+            asrtts_recog.py \
             --ngpu ${ngpu} \
             --backend ${backend} \
             --recog-json ${feat_recog_dir}/split${nj}utt/data.JOB.json \

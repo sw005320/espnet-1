@@ -42,8 +42,10 @@ class Reporter(chainer.Chain):
         if t2t_loss:
             t2t_loss_data = t2t_loss[0].data[0] if torch_is_old else t2t_loss[0].item()
             reporter.report({'t2t_loss': t2t_loss_data}, self)
-        reporter.report({'asr_acc': asr_acc}, self)
-        reporter.report({'t2t_acc': t2t_acc}, self)
+        if asr_acc:
+            reporter.report({'asr_acc': asr_acc}, self)
+        if t2t_acc:
+            reporter.report({'t2t_acc': t2t_acc}, self)
 
 
 class ASRTTSLoss(torch.nn.Module):
