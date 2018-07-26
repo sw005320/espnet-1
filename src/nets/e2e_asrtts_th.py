@@ -27,21 +27,16 @@ torch_is_old = torch.__version__.startswith("0.3.")
 
 class Reporter(chainer.Chain):
     def report(self, loss, asr_loss, tts_loss, s2s_loss, t2t_loss, asr_acc, t2t_acc):
-
-        loss_data = loss[0].data[0] if torch_is_old else loss[0].item()
-        reporter.report({'loss': loss_data}, self)
+        if loss:
+            reporter.report({'loss': loss}, self)
         if asr_loss:
-            asr_loss_data = asr_loss[0].data[0] if torch_is_old else asr_loss[0].item()
-            reporter.report({'asr_loss': asr_loss_data}, self)
+            reporter.report({'asr_loss': asr_loss}, self)
         if tts_loss:
-            tts_loss_data = tts_loss[0].data[0] if torch_is_old else tts_loss[0].item()
-            reporter.report({'tts_loss': tts_loss_data}, self)
+            reporter.report({'tts_loss': tts_loss}, self)
         if s2s_loss:
-            s2s_loss_data = s2s_loss[0].data[0] if torch_is_old else s2s_loss[0].item()
-            reporter.report({'s2s_loss': s2s_loss_data}, self)
+            reporter.report({'s2s_loss': s2s_loss}, self)
         if t2t_loss:
-            t2t_loss_data = t2t_loss[0].data[0] if torch_is_old else t2t_loss[0].item()
-            reporter.report({'t2t_loss': t2t_loss_data}, self)
+            reporter.report({'t2t_loss': t2t_loss}, self)
         if asr_acc:
             reporter.report({'asr_acc': asr_acc}, self)
         if t2t_acc:

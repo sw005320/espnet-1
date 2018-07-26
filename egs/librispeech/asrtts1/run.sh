@@ -114,6 +114,8 @@ data_url=www.openslr.org/resources/12
 # exp tag
 tag="" # tag for managing experiments.
 
+data_type=data_p
+
 . utils/parse_options.sh || exit 1;
 
 . ./path.sh
@@ -324,7 +326,7 @@ if [ ${stage} -le 4 ]; then
         --minibatches ${N} \
         --verbose ${verbose} \
         --resume ${resume} \
-        --train-json ${feat_tr_dir}/data_p.json \
+        --train-json ${feat_tr_dir}/${data_type}.json \
         --valid-json ${feat_dt_dir}/data.json \
         --etype ${etype} \
         --elayers ${elayers} \
