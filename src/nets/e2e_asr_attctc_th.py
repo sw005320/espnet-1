@@ -29,6 +29,8 @@ from e2e_asr_common import label_smoothing_dist
 
 torch_is_old = torch.__version__.startswith("0.3.")
 
+len_norm = False
+
 CTC_LOSS_THRESHOLD = 10000
 CTC_SCORING_RATIO = 1.5
 MAX_DECODER_OUTPUT = 5
@@ -505,6 +507,8 @@ class CTC(torch.nn.Module):
         # expected shape of seqLength x batchSize x alphabet_size
         y_hat = y_hat.transpose(0, 1)
         self.loss = to_cuda(self, self.loss_fn(y_hat, y_true, ilens, olens))
+        if len_norm:
+            self.loss *= (1.0/np.mean([x.size(0) for x in ys]))
         logging.info('ctc loss:' + str(self.loss.data[0]))
 
         return self.loss
@@ -798,8 +802,7 @@ class AttLoc(torch.nn.Module):
 
         # weighted sum over flames
         # utt x hdim
-        # NOTE equivalent to c = torch.sum(self.enc_h * w.view(batch, self.h_length, 1), dim=1)
-        c = torch.matmul(w.unsqueeze(1), self.enc_h).squeeze(1)
+        c = torch.sum(self.enc_h * w.view(batch, self.h_length, 1), dim=1)
 
         return c, w
 
@@ -1739,7 +1742,8 @@ class Decoder(torch.nn.Module):
                                     ignore_index=self.ignore_id,
                                     size_average=True)
         # -1: eos, which is removed in the loss computation
-        self.loss *= (np.mean([len(x) for x in ys_in]) - 1)
+        if not len_norm:
+            self.loss *= (np.mean([len(x) for x in ys_in]) - 1)
         acc = th_accuracy(y_all, pad_ys_out, ignore_label=self.ignore_id)
         logging.info('att loss:' + ''.join(str(self.loss.data).split('\n')))
 

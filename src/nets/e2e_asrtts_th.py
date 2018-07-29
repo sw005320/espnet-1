@@ -213,15 +213,7 @@ class AutoEncoderSpeech(torch.nn.Module):
             else:
                 weights = None
             # masking padded values
-            mask = make_mask(tts_featlens, tts_feats.size(2))
-            if torch.cuda.is_available():
-                tts_feats = tts_feats.cuda()
-                after_outs = after_outs.cuda()
-                before_outs = before_outs.cuda()
-                tts_labels = tts_labels.cuda()
-                logits = logits.cuda()
-                if weights is not None:
-                    weights = weights.cuda()
+            mask = to_cuda(self, make_mask(tts_featlens, tts_feats.size(2)))
             feats = tts_feats.masked_select(mask)
             after_outs = after_outs.masked_select(mask)
             before_outs = before_outs.masked_select(mask)

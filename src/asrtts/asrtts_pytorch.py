@@ -94,7 +94,7 @@ class CustomEvaluater(extensions.Evaluator):
                     logging.error("Error: evaluation only support a parallel data mode ('p')")
                     sys.exit()
                 tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens = get_tts_data(self.model, data, 'text')
-                avg_featlen = float(np.mean(tts_featlens.data.cpu().numpy()))
+                avg_textlen = float(np.mean(tts_textlens.data.cpu().numpy()))
 
                 asr_loss, asr_acc = self.model.asr_loss(data, do_report=False, report_acc=True)  # disable reporter
                 tts_loss = self.model.tts_loss(tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens,
@@ -103,12 +103,12 @@ class CustomEvaluater(extensions.Evaluator):
                 t2t_loss, t2t_acc = self.model.ae_text(data)
 
                 # average loss for all four networks
-                loss = (asr_loss + avg_featlen * (tts_loss + s2s_loss) + t2t_loss)/ 4.0
+                loss = (asr_loss/avg_textlen + tts_loss + s2s_loss + t2t_loss/avg_textlen)/ 4.0
                 loss_data = loss.data[0] if torch_is_old else loss.item()
-                asr_loss_data = asr_loss.data[0] if torch_is_old else asr_loss.item()
+                asr_loss_data = asr_loss.data[0]/avg_textlen if torch_is_old else asr_loss.item()/avg_textlen
                 tts_loss_data = tts_loss.data[0] if torch_is_old else tts_loss.item()
                 s2s_loss_data = s2s_loss.data[0] if torch_is_old else s2s_loss.item()
-                t2t_loss_data = t2t_loss.data[0] if torch_is_old else t2t_loss.item()
+                t2t_loss_data = t2t_loss.data[0]/avg_textlen if torch_is_old else t2t_loss.item()/avg_textlen
                 self.model.reporter.report(loss_data,
                                            asr_loss_data,
                                            tts_loss_data,
@@ -183,7 +183,7 @@ class CustomUpdater(training.StandardUpdater):
 
         # Compute the loss at this time step and accumulate it
         tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens = get_tts_data(self.model, data, 'text')
-        avg_featlen = float(np.mean(tts_featlens.data.cpu().numpy()))
+        avg_textlen = float(np.mean(tts_textlens.data.cpu().numpy()))
         do_all = True
         if data[0][1]['utt2mode'] == 'p':
             logging.info("parallel data mode")
@@ -197,25 +197,25 @@ class CustomUpdater(training.StandardUpdater):
             for mode in modes:
                 if mode == 'asr':
                     loss, asr_acc = self.model.asr_loss(data, do_report=False, report_acc=True)  # disable reporter
+                    loss = loss/avg_textlen
                     asr_loss_data = loss.data[0] if torch_is_old else loss.item()
                     loss_data_sum += asr_loss_data
                     logging.info("asr_loss_data: %f", asr_loss_data)
                 if mode == 'tts':
                     loss = self.model.tts_loss(tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens, do_report=False)
                     tts_loss_data = loss.data[0] if torch_is_old else loss.item()
-                    loss_data_sum += avg_featlen * tts_loss_data
-                    loss *= avg_featlen
+                    loss_data_sum += tts_loss_data
                     logging.info("tts_loss_data: %f", tts_loss_data)
                 if mode == 's2s':
                     #update_parameters(self.model.tts_loss.model.dec.att, False)
                     loss = self.model.ae_speech(data)
                     s2s_loss_data = loss.data[0] if torch_is_old else loss.item()
-                    loss_data_sum += avg_featlen * s2s_loss_data
-                    loss *= avg_featlen
+                    loss_data_sum += s2s_loss_data
                     logging.info("s2s_loss_data: %f", s2s_loss_data)
                 if mode == 't2t':
                     #update_parameters(self.model.asr_loss.predictor.att, False)
                     loss, t2t_acc = self.model.ae_text(data)
+                    loss = loss/avg_textlen
                     t2t_loss_data = loss.data[0] if torch_is_old else loss.item()
                     loss_data_sum += t2t_loss_data
                     logging.info("t2t_loss_data: %f", t2t_loss_data)
@@ -236,17 +236,17 @@ class CustomUpdater(training.StandardUpdater):
         elif data[0][1]['utt2mode'] == 'a':
             logging.info("audio only mode")
             s2s_loss = self.model.ae_speech(data)
-            loss = avg_featlen * s2s_loss
+            loss = s2s_loss
             logging.info("loss: %f", loss[0].data[0] if torch_is_old else loss[0].item())
             self.gradient_decent(loss, optimizer)
-            self.model.reporter.report(loss, None, None, s2s_loss, None, None, None)
+            self.model.reporter.report(loss, None, None, loss, None, None, None)
         elif data[0][1]['utt2mode'] == 't':
             logging.info("text only mode")
             t2t_loss, t2t_acc = self.model.ae_text(data)
-            loss = t2t_loss
+            loss = t2t_loss / avg_textlen
             logging.info("loss: %f", loss[0].data[0] if torch_is_old else loss[0].item())
             self.gradient_decent(loss, optimizer)
-            self.model.reporter.report(loss, None, None, None, t2t_loss, None, t2t_acc)
+            self.model.reporter.report(loss, None, None, None, loss, None, t2t_acc)
         else:
             logging.error("Error: cannot find correct mode ('p', 'a', 't')")
             sys.exit()

@@ -31,7 +31,7 @@ win_length=400 # number of samples in analysis window
 # ASR network archtecture
 # encoder related
 etype=blstmp   # encoder architecture type
-elayers=6
+elayers=4
 eunits=320
 eprojs=512 # ASR default 320
 subsample=1_2_2_1_1 # skip every n frame from input to nth layers
@@ -45,7 +45,7 @@ aconv_chans=10
 aconv_filts=100
 
 # hybrid CTC/attention
-mtlalpha=0.5
+mtlalpha=0.0
 
 # TTS network archtecture
 # encoder related
@@ -98,9 +98,9 @@ lm_weight=0.3
 # decoding parameter
 beam_size=20
 penalty=0.0
-maxlenratio=0.0
-minlenratio=0.0
-ctc_weight=0.3
+maxlenratio=0.8
+minlenratio=0.3
+ctc_weight=0.0
 recog_model=loss.best # set a model to be used for decoding: 'acc.best' or 'loss.best'
 
 # Set this to somewhere where you want to put your data, or where
@@ -114,7 +114,7 @@ data_url=www.openslr.org/resources/12
 # exp tag
 tag="" # tag for managing experiments.
 
-data_type=data_p
+data_type=data_short_p
 
 . utils/parse_options.sh || exit 1;
 
@@ -180,6 +180,7 @@ if [ ${stage} -le 1 ]; then
     # remove utt having more than 400 characters
     utils/copy_data_dir.sh data/${train_set} data/${train_set}_org
     utils/copy_data_dir.sh data/${train_dev} data/${train_dev}_org
+
     remove_longshortdata.sh --maxframes 3000 --maxchars 400 data/${train_set}_org data/${train_set}
     remove_longshortdata.sh --maxframes 3000 --maxchars 400 data/${train_dev}_org data/${train_dev}
 
@@ -313,6 +314,12 @@ else
 fi
 mkdir -p ${expdir}
 
+if false; then
+local/remove_longshort_utt.py --max-input 1500 --max-output 300 \
+    ${feat_tr_dir}/data.json > ${feat_tr_dir}/${data_type}.json
+local/remove_longshort_utt.py --max-input 1500 --max-output 300 \
+    ${feat_dt_dir}/data.json > ${feat_dt_dir}/${data_type}.json
+fi
 if [ ${stage} -le 4 ]; then
     echo "stage 4: Network Training"
     ${cuda_cmd} --gpu ${ngpu} ${expdir}/train.log \
@@ -327,7 +334,7 @@ if [ ${stage} -le 4 ]; then
         --verbose ${verbose} \
         --resume ${resume} \
         --train-json ${feat_tr_dir}/${data_type}.json \
-        --valid-json ${feat_dt_dir}/data.json \
+        --valid-json ${feat_dt_dir}/${data_type}.json \
         --etype ${etype} \
         --elayers ${elayers} \
         --eunits ${eunits} \
