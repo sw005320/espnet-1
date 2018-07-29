@@ -9,8 +9,6 @@ from __future__ import division
 import logging
 import sys
 
-import chainer
-from chainer import reporter
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -25,24 +23,6 @@ from tts_pytorch import pad_ndarray_list
 torch_is_old = torch.__version__.startswith("0.3.")
 
 
-class Reporter(chainer.Chain):
-    def report(self, loss, asr_loss, tts_loss, s2s_loss, t2t_loss, asr_acc, t2t_acc):
-        if loss:
-            reporter.report({'loss': loss}, self)
-        if asr_loss:
-            reporter.report({'asr_loss': asr_loss}, self)
-        if tts_loss:
-            reporter.report({'tts_loss': tts_loss}, self)
-        if s2s_loss:
-            reporter.report({'s2s_loss': s2s_loss}, self)
-        if t2t_loss:
-            reporter.report({'t2t_loss': t2t_loss}, self)
-        if asr_acc:
-            reporter.report({'asr_acc': asr_acc}, self)
-        if t2t_acc:
-            reporter.report({'t2t_acc': t2t_acc}, self)
-
-
 class ASRTTSLoss(torch.nn.Module):
     def __init__(self, asr_loss, tts_loss, args, return_targets=True):
         super(ASRTTSLoss, self).__init__()
@@ -52,36 +32,7 @@ class ASRTTSLoss(torch.nn.Module):
         self.ae_speech = AutoEncoderSpeech(asr_loss, tts_loss, args)
         self.ae_text = AutoEncoderText(asr_loss, tts_loss, args)
 
-        self.reporter = Reporter()
         self.return_targets = return_targets
-
-    def forward(self, data):
-        # these are used to adujst the loss and also pass the data to tts
-        tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens = get_tts_data(self, data, 'text')
-        avg_featlen = float(np.mean(tts_featlens.data.cpu().numpy()))
-        if data[0][1]['utt2mode'] == 'p':
-            logging.info("parallel data mode")
-            asr_loss, asr_acc = self.asr_loss(data, do_report=False, report_acc=True)  # disable reporter
-            tts_loss = self.tts_loss(tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens, do_report=False)
-            s2s_loss = self.ae_speech(data)
-            t2t_loss, t2t_acc = self.ae_text(data)
-            loss = asr_loss + avg_featlen * tts_loss + avg_featlen * s2s_loss + t2t_loss
-            self.reporter.report(loss, asr_loss, tts_loss, s2s_loss, t2t_loss, asr_acc, t2t_acc)
-        elif data[0][1]['utt2mode'] == 'a':
-            logging.info("audio only mode")
-            s2s_loss = self.ae_speech(data)
-            loss = avg_featlen * s2s_loss
-            self.reporter.report(loss, None, None, s2s_loss, None, None, None)
-        elif data[0][1]['utt2mode'] == 't':
-            logging.info("text only mode")
-            t2t_loss, t2t_acc = self.ae_text(data)
-            loss = t2t_loss
-            self.reporter.report(loss, None, None, None, t2t_loss, None, t2t_acc)
-        else:
-            logging.error("Error: cannot find correct mode ('p', 'a', 't')")
-            sys.exit()
-
-        return loss
 
 
 def get_asr_data(self, data, sort_by):
@@ -239,7 +190,6 @@ class AutoEncoderSpeech(torch.nn.Module):
         mse_loss_data = mse_loss.data[0] if torch_is_old else mse_loss.item()
         logging.debug("loss = %.3e (bce: %.3e, l1: %.3e, mse: %.3e)" % (
             loss_data, bce_loss_data, l1_loss_data, mse_loss_data))
-        # self.tts_loss.reporter.report(l1_loss_data, mse_loss_data, bce_loss_data, loss_data)
 
         return loss
 

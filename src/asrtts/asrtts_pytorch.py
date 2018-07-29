@@ -56,13 +56,16 @@ import lm_pytorch
 import matplotlib
 matplotlib.use('Agg')
 
+# some tuning params
+REPORT_INTERVAL = 10
+ALL_MODE = True
+FREEZE_ATT = True
 
 class CustomEvaluater(extensions.Evaluator):
     '''Custom evaluater for pytorch'''
 
     def __init__(self, model, iterator, target, converter, device):
-        super(CustomEvaluater, self).__init__(
-            iterator, target, converter=converter, device=device)
+        super(CustomEvaluater, self).__init__(iterator, target, converter=converter, device=device)
         self.model = model
 
     # The core part of the update routine can be customized by overriding.
@@ -109,13 +112,14 @@ class CustomEvaluater(extensions.Evaluator):
                 tts_loss_data = tts_loss.data[0] if torch_is_old else tts_loss.item()
                 s2s_loss_data = s2s_loss.data[0] if torch_is_old else s2s_loss.item()
                 t2t_loss_data = t2t_loss.data[0]/avg_textlen if torch_is_old else t2t_loss.item()/avg_textlen
-                self.model.reporter.report(loss_data,
-                                           asr_loss_data,
-                                           tts_loss_data,
-                                           s2s_loss_data,
-                                           t2t_loss_data,
-                                           asr_acc,
-                                           t2t_acc)
+
+                chainer.reporter.report({'d/loss': loss_data})
+                chainer.reporter.report({'d/asr_loss': asr_loss_data})
+                chainer.reporter.report({'d/tts_loss': tts_loss_data})
+                chainer.reporter.report({'d/asr_acc': asr_acc})
+                chainer.reporter.report({'d/s2s_loss': s2s_loss_data})
+                chainer.reporter.report({'d/t2t_loss': t2t_loss_data})
+                chainer.reporter.report({'d/t2t_acc': t2t_acc})
 
                 delete_feat(data)
 
@@ -138,12 +142,13 @@ class CustomUpdater(training.StandardUpdater):
     '''Custom updater for pytorch'''
 
     def __init__(self, model, grad_clip_threshold, train_iter,
-                 optimizer, converter, device):
+                 opts, converter, device):
         super(CustomUpdater, self).__init__(
-            train_iter, optimizer, converter=converter, device=None)
+            train_iter, opts, converter=converter, device=None)
         self.model = model
         self.grad_clip_threshold = grad_clip_threshold
         self.num_gpu = len(device)
+        self.opts = opts
 
         if torch_is_old:
             self.clip_grad_norm = torch.nn.utils.clip_grad_norm
@@ -151,6 +156,10 @@ class CustomUpdater(training.StandardUpdater):
             self.clip_grad_norm = torch.nn.utils.clip_grad_norm_
 
     def gradient_decent(self, loss, optimizer):
+        if FREEZE_ATT:
+            update_parameters(self.model.tts_loss.model.dec.att, False)
+            update_parameters(self.model.asr_loss.predictor.att, False)
+
         optimizer.zero_grad()  # Clear the parameter gradients
         loss.backward()  # Backprop
         loss.detach()  # Truncate the graph
@@ -162,12 +171,15 @@ class CustomUpdater(training.StandardUpdater):
         else:
             optimizer.step()
 
+        if FREEZE_ATT:
+            update_parameters(self.model.tts_loss.model.dec.att, True)
+            update_parameters(self.model.asr_loss.predictor.att, True)
+
     # The core part of the update routine can be customized by overriding.
     def update_core(self):
         # When we pass one iterator and optimizer to StandardUpdater.__init__,
         # they are automatically named 'main'.
         train_iter = self.get_iterator('main')
-        optimizer = self.get_optimizer('main')
 
         # Get the next batch ( a list of json files)
         batch = train_iter.__next__()
@@ -184,10 +196,9 @@ class CustomUpdater(training.StandardUpdater):
         # Compute the loss at this time step and accumulate it
         tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens = get_tts_data(self.model, data, 'text')
         avg_textlen = float(np.mean(tts_textlens.data.cpu().numpy()))
-        do_all = True
         if data[0][1]['utt2mode'] == 'p':
             logging.info("parallel data mode")
-            if do_all:
+            if ALL_MODE:
                 modes = ['asr', 'tts', 's2s', 't2t']
             else:
                 modes = ['asr', 'tts']
@@ -207,46 +218,53 @@ class CustomUpdater(training.StandardUpdater):
                     loss_data_sum += tts_loss_data
                     logging.info("tts_loss_data: %f", tts_loss_data)
                 if mode == 's2s':
-                    #update_parameters(self.model.tts_loss.model.dec.att, False)
                     loss = self.model.ae_speech(data)
                     s2s_loss_data = loss.data[0] if torch_is_old else loss.item()
                     loss_data_sum += s2s_loss_data
                     logging.info("s2s_loss_data: %f", s2s_loss_data)
                 if mode == 't2t':
-                    #update_parameters(self.model.asr_loss.predictor.att, False)
                     loss, t2t_acc = self.model.ae_text(data)
                     loss = loss/avg_textlen
                     t2t_loss_data = loss.data[0] if torch_is_old else loss.item()
                     loss_data_sum += t2t_loss_data
                     logging.info("t2t_loss_data: %f", t2t_loss_data)
                 logging.info("loss_data_sum: %f", loss_data_sum)
-                self.gradient_decent(loss, optimizer)
-                #update_parameters(self.model.asr_loss.predictor.att, True)
-            if do_all:
+                self.gradient_decent(loss, self.opts[mode])
+            if ALL_MODE:
                 loss_data = loss_data_sum / 4.0
             else:
                 loss_data = loss_data_sum / 2.0
             logging.info("loss_data: %f", loss_data)
-            if do_all:
-                self.model.reporter.report(loss_data, asr_loss_data, tts_loss_data, s2s_loss_data, t2t_loss_data,
-                                           asr_acc, t2t_acc)
-            else:
-                self.model.reporter.report(loss_data, asr_loss_data, tts_loss_data, None, None, asr_acc, None)
+            chainer.reporter.report({'t/loss': loss_data})
+            chainer.reporter.report({'t/asr_loss': asr_loss_data})
+            chainer.reporter.report({'t/tts_loss': tts_loss_data})
+            chainer.reporter.report({'t/asr_acc': asr_acc})
+            if ALL_MODE:
+                chainer.reporter.report({'t/s2s_loss': s2s_loss_data})
+                chainer.reporter.report({'t/t2t_loss': t2t_loss_data})
+                chainer.reporter.report({'t/t2t_acc': t2t_acc})
 
         elif data[0][1]['utt2mode'] == 'a':
             logging.info("audio only mode")
             s2s_loss = self.model.ae_speech(data)
             loss = s2s_loss
-            logging.info("loss: %f", loss[0].data[0] if torch_is_old else loss[0].item())
-            self.gradient_decent(loss, optimizer)
-            self.model.reporter.report(loss, None, None, loss, None, None, None)
+            self.gradient_decent(loss, self.opts['s2s'])
+
+            loss_data = loss.data[0] if torch_is_old else loss.item()
+            logging.info("loss: %f", loss_data)
+            chainer.reporter.report({'t/loss': loss_data})
+            chainer.reporter.report({'t/s2s_loss': loss_data})
         elif data[0][1]['utt2mode'] == 't':
             logging.info("text only mode")
             t2t_loss, t2t_acc = self.model.ae_text(data)
             loss = t2t_loss / avg_textlen
-            logging.info("loss: %f", loss[0].data[0] if torch_is_old else loss[0].item())
-            self.gradient_decent(loss, optimizer)
-            self.model.reporter.report(loss, None, None, None, loss, None, t2t_acc)
+            self.gradient_decent(loss, self.opts['t2t'])
+
+            loss_data = loss.data[0] if torch_is_old else loss.item()
+            logging.info("loss: %f", loss_data)
+            chainer.reporter.report({'t/loss': loss_data})
+            chainer.reporter.report({'t/t2t_loss': loss_data})
+            chainer.reporter.report({'t/t2t_acc': t2t_acc})
         else:
             logging.error("Error: cannot find correct mode ('p', 'a', 't')")
             sys.exit()
@@ -426,7 +444,6 @@ def train(args):
         logging.info('ARGS: ' + key + ': ' + str(vars(args)[key]))
 
     # Set gpu
-    reporter = model.reporter
     ngpu = args.ngpu
     if ngpu == 1:
         gpu_id = range(ngpu)
@@ -444,17 +461,18 @@ def train(args):
         gpu_id = [-1]
 
     # Setup an optimizer
-    if args.opt == 'adadelta':
-        optimizer = torch.optim.Adadelta(
-            model.parameters(), rho=0.95, eps=args.eps)
-    elif args.opt == 'adam':
-        optimizer = torch.optim.Adam(model.parameters(),
-                                     args.lr, eps=args.eps,
-                                     weight_decay=args.weight_decay)
+    dummy_target = chainer.Chain()
+    opts = {}
+    opts_keys = ['asr', 'tts', 's2s', 't2t']
+    for key in opts_keys:
+        if args.opt == 'adadelta':
+            opts[key] = torch.optim.Adadelta(model.parameters(), rho=0.95, eps=args.eps)
+        elif args.opt == 'adam':
+            opts[key] = torch.optim.Adam(model.parameters(), args.lr, eps=args.eps, weight_decay=args.weight_decay)
 
-    # FIXME: TOO DIRTY HACK
-    setattr(optimizer, "target", reporter)
-    setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
+        # FIXME: TOO DIRTY HACK
+        setattr(opts[key], "target", dummy_target)
+        setattr(opts[key], "serialize", lambda s: dummy_target.serialize(s))
 
     # read json data
     with open(args.train_json, 'rb') as f:
@@ -474,7 +492,7 @@ def train(args):
         valid, 1, repeat=False, shuffle=False)
 
     # Set up a trainer
-    updater = CustomUpdater(model, args.grad_clip, train_iter, optimizer,
+    updater = CustomUpdater(model, args.grad_clip, train_iter, opts,
                             converter=converter_kaldi, device=gpu_id)
     trainer = training.Trainer(
         updater, (args.epochs, 'epoch'), out=args.outdir)
@@ -490,7 +508,7 @@ def train(args):
 
     # Evaluate the model with the test dataset for each epoch
     trainer.extend(CustomEvaluater(
-        model, valid_iter, reporter, converter=converter_kaldi, device=gpu_id))
+        model, valid_iter, dummy_target, converter=converter_kaldi, device=gpu_id))
 
     # Save attention weight each epoch
     if args.num_save_attention > 0 and args.mtlalpha != 1.0:
@@ -505,14 +523,12 @@ def train(args):
     trainer.extend(extensions.snapshot(), trigger=(1, 'epoch'))
 
     # Make a plot for training and validation values
-    trainer.extend(extensions.PlotReport(['main/loss', 'validation/main/loss',
-                                          'main/asr_loss', 'validation/main/asr_loss',
-                                          'main/tts_loss', 'validation/main/tts_loss',
-                                          'main/s2s_loss', 'validation/main/s2s_loss',
-                                          'main/t2t_loss', 'validation/main/t2t_loss',
-                                          ],
+    # report keys
+    report_keys = ['t/loss', 't/asr_loss', 't/tts_loss', 't/s2s_loss', 't/t2t_loss',
+                   'd/loss', 'd/asr_loss', 'd/tts_loss', 'd/s2s_loss', 'd/t2t_loss']
+    trainer.extend(extensions.PlotReport(report_keys,
                                          'epoch', file_name='loss.png'))
-    trainer.extend(extensions.PlotReport(['main/asr_acc', 'validation/main/asr_acc'],
+    trainer.extend(extensions.PlotReport(['t/asr_acc', 'd/asr_acc'],
                                          'epoch', file_name='acc.png'))
 
     # Save best models
@@ -525,7 +541,7 @@ def train(args):
             torch.save(model, path + ".pkl")
 
     trainer.extend(extensions.snapshot_object(model, 'model.loss.best', savefun=torch_save),
-                   trigger=training.triggers.MinValueTrigger('validation/main/loss'))
+                   trigger=training.triggers.MinValueTrigger('d/loss'))
 
     # epsilon decay in the optimizer
     def torch_load(path, obj):
@@ -538,39 +554,38 @@ def train(args):
         if args.criterion == 'acc' and mtl_mode is not 'ctc':
             trainer.extend(restore_snapshot(model, args.outdir + '/model.acc.best', load_fn=torch_load),
                            trigger=CompareValueTrigger(
-                               'validation/main/asr_acc',
+                               'd/asr_acc',
                                lambda best_value, current_value: best_value > current_value))
             trainer.extend(adadelta_eps_decay(args.eps_decay),
                            trigger=CompareValueTrigger(
-                               'validation/main/asr_acc',
+                               'd/asr_acc',
                                lambda best_value, current_value: best_value > current_value))
         elif args.criterion == 'loss':
             trainer.extend(restore_snapshot(model, args.outdir + '/model.loss.best', load_fn=torch_load),
                            trigger=CompareValueTrigger(
-                               'validation/main/loss',
+                               'd/loss',
                                lambda best_value, current_value: best_value < current_value))
             trainer.extend(adadelta_eps_decay(args.eps_decay),
                            trigger=CompareValueTrigger(
-                               'validation/main/loss',
+                               'd/loss',
                                lambda best_value, current_value: best_value < current_value))
 
     # Write a log of evaluation statistics for each epoch
-    trainer.extend(extensions.LogReport(trigger=(50, 'iteration')))
-    report_keys = ['epoch', 'iteration', 'elapsed_time',
-                   'main/loss', 'main/asr_loss', 'main/tts_loss', 'main/s2s_loss', 'main/t2t_loss',
-                   'main/asr_acc', 'main/t2t_acc',
-                   'validation/main/loss', 'validation/main/asr_loss', 'validation/main/tts_loss',
-                   'validation/main/s2s_loss', 'validation/main/t2t_loss',
-                   'validation/main/asr_acc', 'validation/main/t2t_acc']
+    trainer.extend(extensions.LogReport(trigger=(REPORT_INTERVAL, 'iteration')))
+    report_keys = ['t/loss', 't/asr_loss', 't/tts_loss', 't/s2s_loss', 't/t2t_loss', 't/asr_acc', 't/t2t_acc',
+                   'd/loss', 'd/asr_loss', 'd/tts_loss', 'd/s2s_loss', 'd/t2t_loss', 'd/asr_acc', 'd/t2t_acc']
+    report_keys.append('epoch')
+    report_keys.append('iteration')
+    report_keys.append('elapsed_time')
     if args.opt == 'adadelta':
         trainer.extend(extensions.observe_value(
             'eps', lambda trainer: trainer.updater.get_optimizer('main').param_groups[0]["eps"]),
-            trigger=(50, 'iteration'))
+            trigger=(REPORT_INTERVAL, 'iteration'))
         report_keys.append('eps')
     trainer.extend(extensions.PrintReport(
-        report_keys), trigger=(50, 'iteration'))
+        report_keys), trigger=(REPORT_INTERVAL, 'iteration'))
 
-    trainer.extend(extensions.ProgressBar())
+    trainer.extend(extensions.ProgressBar(update_interval=REPORT_INTERVAL))
 
     # Run the training
     trainer.run()
