@@ -524,8 +524,8 @@ def train(args):
 
     # Make a plot for training and validation values
     # report keys
-    report_keys = ['t/loss', 't/asr_loss', 't/tts_loss', 't/s2s_loss', 't/t2t_loss',
-                   'd/loss', 'd/asr_loss', 'd/tts_loss', 'd/s2s_loss', 'd/t2t_loss']
+    report_keys = ['t/loss', 't/tts_loss', 't/s2s_loss', 't/asr_loss', 't/t2t_loss',
+                   'd/loss', 'd/tts_loss', 'd/s2s_loss', 'd/asr_loss', 'd/t2t_loss']
     trainer.extend(extensions.PlotReport(report_keys,
                                          'epoch', file_name='loss.png'))
     trainer.extend(extensions.PlotReport(['t/asr_acc', 'd/asr_acc'],
@@ -572,8 +572,8 @@ def train(args):
 
     # Write a log of evaluation statistics for each epoch
     trainer.extend(extensions.LogReport(trigger=(REPORT_INTERVAL, 'iteration')))
-    report_keys = ['t/loss', 't/asr_loss', 't/tts_loss', 't/s2s_loss', 't/t2t_loss', 't/asr_acc', 't/t2t_acc',
-                   'd/loss', 'd/asr_loss', 'd/tts_loss', 'd/s2s_loss', 'd/t2t_loss', 'd/asr_acc', 'd/t2t_acc']
+    report_keys = ['t/loss', 't/tts_loss', 't/s2s_loss', 't/asr_loss', 't/t2t_loss', 't/asr_acc', 't/t2t_acc',
+                   'd/loss', 'd/tts_loss', 'd/s2s_loss', 'd/asr_loss', 'd/t2t_loss', 'd/asr_acc', 'd/t2t_acc']
     report_keys.append('epoch')
     report_keys.append('iteration')
     report_keys.append('elapsed_time')
