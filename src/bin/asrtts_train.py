@@ -153,6 +153,8 @@ def main():
     parser.add_argument('--tts-output_activation', default=None, type=str, nargs='?',
                         help='Output activation function')
     # model (parameter) related
+    parser.add_argument('--tts-use_speaker_embedding', default=False, type=strtobool,
+                        help='Whether to use speaker embedding')
     parser.add_argument('--tts-use_batch_norm', default=True, type=strtobool,
                         help='Whether to use batch normalization')
     parser.add_argument('--tts-use_concate', default=True, type=strtobool,

@@ -37,7 +37,7 @@ class ASRTTSLoss(torch.nn.Module):
 
 def get_asr_data(self, data, sort_by):
     # utt list of frame x dim
-    xs = [d[1]['feat'] for d in data]
+    xs = [d[1]['feat_asr'] for d in data]
     # remove 0-output-length utterances
     tids = [d[1]['output'][0]['tokenid'].split() for d in data]
     filtered_index = filter(lambda i: len(tids[i]) > 0, range(len(xs)))
@@ -79,7 +79,7 @@ def get_tts_data(self, data, sort_by):
 
     # get target features and input character sequence
     texts = [b[1]['output'][0]['tokenid'].split() + [eos] for b in data]
-    feats = [b[1]['feat'] for b in data]
+    feats = [b[1]['feat_tts'] for b in data]
 
     # remove empty sequence and get sort along with length
     filtered_idx = filter(lambda i: len(texts[i]) > 0, range(len(feats)))
@@ -115,10 +115,23 @@ def get_tts_data(self, data, sort_by):
         feats = to_cuda(self, feats)
         labels = to_cuda(self, labels)
 
-    if self.return_targets:
-        return texts, textlens, feats, labels, featlens
+    # load speaker embedding
+    if self.use_speaker_embedding:
+        spembs = [b[1]['feat_spembs'] for b in data]
+        spembs = [spembs[i] for i in sorted_idx]
+        spembs = torch.from_numpy(np.array(spembs)).float()
+
+        if torch_is_old:
+            spembs = to_cuda(self, spembs, volatile=not self.training)
+        else:
+            spembs = to_cuda(self, spembs)
     else:
-        return texts, textlens, feats
+        spembs = None
+
+    if self.return_targets:
+        return texts, textlens, feats, labels, featlens, spembs
+    else:
+        return texts, textlens, feats, spembs
 
 
 def get_subsample(args):
@@ -146,11 +159,13 @@ class AutoEncoderSpeech(torch.nn.Module):
 
     def forward(self, data):
         asr_texts, asr_feats, asr_featlens = get_asr_data(self, data, 'feat')
-        tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens = get_tts_data(self, data, 'feat')
+        tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens, spembs = get_tts_data(self, data, 'feat')
 
         # encoder
         hpad, hlens = self.asr_enc(asr_feats, asr_featlens)
-
+        if self.tts_loss.model.spk_embed_dim is not None:
+            spembs = F.normalize(spembs).unsqueeze(1).expand(-1, hpad.size(1), -1)
+            hpad = torch.cat([hpad, spembs], dim=-1)
         after_outs, before_outs, logits = self.tts_dec(hpad, hlens, tts_feats)
         # copied from e2e_tts_th.py
         if self.tts_loss.use_masking and tts_featlens is not None:
@@ -206,7 +221,7 @@ class AutoEncoderText(torch.nn.Module):
 
     def forward(self, data):
         asr_texts, asr_feats, asr_featlens = get_asr_data(self, data, 'text')
-        tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens = get_tts_data(self, data, 'text')
+        tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens, spembs = get_tts_data(self, data, 'text')
         
         if isinstance(tts_textlens, torch.Tensor) or isinstance(tts_textlens, np.ndarray):
             tts_textlens = list(map(int, tts_textlens))

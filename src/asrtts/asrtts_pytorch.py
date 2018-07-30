@@ -27,8 +27,6 @@ import torch
 # spnet related
 from asr_utils import adadelta_eps_decay
 from asr_utils import CompareValueTrigger
-from asr_utils import converter_kaldi
-from asr_utils import delete_feat
 from asr_utils import load_labeldict
 from asr_utils import make_batchset
 from asr_utils import PlotAttentionReport
@@ -60,6 +58,29 @@ matplotlib.use('Agg')
 REPORT_INTERVAL = 10
 ALL_MODE = False
 FREEZE_ATT = True
+
+def converter_kaldi(batch, device=None):
+    # batch only has one minibatch utterance, which is specified by batch[0]
+    batch = batch[0]
+    for data in batch:
+        feat_asr = kaldi_io_py.read_mat(data[1]['input'][0]['feat'])
+        feat_tts = kaldi_io_py.read_mat(data[1]['input'][1]['feat'])
+        feat_spembs = kaldi_io_py.read_vec_flt(data[1]['input'][2]['feat'])
+        data[1]['feat_asr'] = feat_asr
+        data[1]['feat_tts'] = feat_tts
+        data[1]['feat_spembs'] = feat_spembs
+
+    return batch
+
+
+def delete_feat(batch):
+    for data in batch:
+        del data[1]['feat_asr']
+        del data[1]['feat_tts']
+        del data[1]['feat_spembs']
+
+    return batch
+
 
 class CustomEvaluater(extensions.Evaluator):
     '''Custom evaluater for pytorch'''
@@ -96,7 +117,7 @@ class CustomEvaluater(extensions.Evaluator):
                 if data[0][1]['utt2mode'] != 'p':
                     logging.error("Error: evaluation only support a parallel data mode ('p')")
                     sys.exit()
-                tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens = get_tts_data(self.model, data, 'text')
+                tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens, spembs = get_tts_data(self.model, data, 'text')
                 avg_textlen = float(np.mean(tts_textlens.data.cpu().numpy()))
 
                 asr_loss, asr_acc = self.model.asr_loss(data, do_report=False, report_acc=True)  # disable reporter
@@ -194,7 +215,7 @@ class CustomUpdater(training.StandardUpdater):
         data = self.converter(batch)
 
         # Compute the loss at this time step and accumulate it
-        tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens = get_tts_data(self.model, data, 'text')
+        tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens, spembs = get_tts_data(self.model, data, 'text')
         avg_textlen = float(np.mean(tts_textlens.data.cpu().numpy()))
         if data[0][1]['utt2mode'] == 'p':
             logging.info("parallel data mode")
@@ -364,16 +385,16 @@ def train(args):
     with open(args.valid_json, 'rb') as f:
         valid_json = json.load(f)['utts']
     utts = list(valid_json.keys())
-    # TODO(nelson) remove in future
-    if 'input' not in valid_json[utts[0]]:
-        logging.error(
-            "input file format (json) is modified, please redo"
-            "stage 2: Dictionary and Json Data Preparation")
-        sys.exit(1)
-    idim = int(valid_json[utts[0]]['input'][0]['shape'][1])
-    odim = int(valid_json[utts[0]]['output'][0]['shape'][1])
-    logging.info('#input dims : ' + str(idim))
-    logging.info('#output dims: ' + str(odim))
+    idim_asr = int(valid_json[utts[0]]['input'][0]['shape'][1])
+    idim_tts = int(valid_json[utts[0]]['input'][1]['shape'][1])
+    odim_asr = int(valid_json[utts[0]]['output'][0]['shape'][1])
+    logging.info('#input dims for ASR: ' + str(idim_asr))
+    logging.info('#input dims for TTS: ' + str(idim_tts))
+    logging.info('#output dims: ' + str(odim_asr))
+    if args.tts_use_speaker_embedding:
+        args.tts_spk_embed_dim = int(valid_json[utts[0]]['input'][2]['shape'][0])
+    else:
+        args.tts_spk_embed_dim = None
 
     # specify attention, CTC, hybrid mode
     if args.mtlalpha == 1.0:
@@ -387,7 +408,7 @@ def train(args):
         logging.info('Multitask learning mode')
 
     # specify model architecture for ASR
-    e2e_asr = E2E(idim, odim, args)
+    e2e_asr = E2E(idim_asr, odim_asr, args)
     logging.info(e2e_asr)
     asr_loss = Loss(e2e_asr, args.mtlalpha)
 
@@ -402,8 +423,9 @@ def train(args):
     # specify model architecture for TTS
     # reverse input and output dimension
     e2e_tts = Tacotron2(
-        idim=odim,
-        odim=idim,
+        idim=odim_asr,
+        odim=idim_tts,
+        spk_embed_dim=args.tts_spk_embed_dim,
         embed_dim=args.tts_embed_dim,
         elayers=args.tts_elayers,
         eunits=args.tts_eunits,
@@ -442,7 +464,7 @@ def train(args):
     with open(model_conf, 'wb') as f:
         logging.info('writing a model config file to' + model_conf)
         # TODO(watanabe) use others than pickle, possibly json, and save as a text
-        pickle.dump((idim, odim, args), f)
+        pickle.dump((idim_asr, odim_asr, args), f)
     for key in sorted(vars(args).keys()):
         logging.info('ARGS: ' + key + ': ' + str(vars(args)[key]))
 
