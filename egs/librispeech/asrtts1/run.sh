@@ -64,6 +64,7 @@ tts_prenet_units=256
 tts_postnet_layers=5 # if set 0, no postnet is used
 tts_postnet_chans=512
 tts_postnet_filts=5
+tts_use_speaker_embedding=true
 # attention related
 tts_adim=128
 tts_aconv_chans=32
@@ -115,7 +116,7 @@ data_url=www.openslr.org/resources/12
 # exp tag
 tag="" # tag for managing experiments.
 
-data_type=data_short_p
+data_type=data_short # data or data_short or data_short_p
 
 . utils/parse_options.sh || exit 1;
 
@@ -208,9 +209,7 @@ if [ ${stage} -le 1 ]; then
 	done
     done
 fi
-exit
-feat_tr_dir=${dumpdir}/${train_set}/delta${do_delta}; mkdir -p ${feat_tr_dir}
-feat_dt_dir=${dumpdir}/${train_dev}/delta${do_delta}; mkdir -p ${feat_dt_dir}
+
 dict=data/lang_1char/train_clean_100_units.txt
 echo "dictionary: ${dict}"
 if [ ${stage} -le 2 ]; then
@@ -243,26 +242,30 @@ if [ ${stage} -le 2 ]; then
 			 data/${task}_${mode} ${dict} > ${feat_dir}/data.json
 	done
     done
+    # combine asr and tts jsons as multiple input and output
+    for task in ${train_set} ${train_dev} ${recog_set}; do
+	feat_dir=${dumpdir}/${task}/delta${do_delta}; mkdir -p ${feat_dir}
+	local/multi_jsons.py ${dumpdir}/${task}_asr/delta${do_delta}/data.json ${dumpdir}/${task}_tts/delta${do_delta}/data.json \
+			     > ${feat_dir}/data.json
+    done
 fi
-exit
-
 
 if [ ${stage} -le 3 ]; then
     echo "stage 3: x-vector extraction"
     # Make MFCCs and compute the energy-based VAD for each dataset
     mfccdir=mfcc
     vaddir=mfcc
-    for name in ${train_set} ${train_dev} ${recog_set}; do
-	utils/copy_data_dir.sh data/${name}_asr data/${name}_mfcc
+    for task in ${train_set} ${train_dev} ${recog_set}; do
+	utils/copy_data_dir.sh data/${task}_asr data/${task}_mfcc
 	steps/make_mfcc.sh \
 	    --write-utt2num-frames true \
 	    --mfcc-config conf/mfcc.conf \
 	    --nj ${nj} --cmd "$train_cmd" \
-	    data/${name}_mfcc exp/make_mfcc $mfccdir
-	utils/fix_data_dir.sh data/${name}_mfcc
+	    data/${task}_mfcc exp/make_mfcc $mfccdir
+	utils/fix_data_dir.sh data/${task}_mfcc
 	sid/compute_vad_decision.sh --nj ${nj} --cmd "$train_cmd" \
-				    data/${name}_mfcc exp/make_vad ${vaddir}
-	utils/fix_data_dir.sh data/${name}_mfcc
+				    data/${task}_mfcc exp/make_vad ${vaddir}
+	utils/fix_data_dir.sh data/${task}_mfcc
     done
     # Check pretrained model existence
     nnet_dir=exp/xvector_nnet_1a
@@ -274,14 +277,23 @@ if [ ${stage} -le 3 ]; then
 	rm -rf 0008_sitw_v2_1a.tar.gz 0008_sitw_v2_1a
     fi
     # Extract x-vector
-    for name in ${train_set} ${train_dev} ${recog_set}; do
+    for task in ${train_set} ${train_dev} ${recog_set}; do
 	sid/nnet3/xvector/extract_xvectors.sh --cmd "$train_cmd --mem 4G" --nj ${nj} \
-					      $nnet_dir data/${name}_mfcc \
-					      $nnet_dir/xvectors_${name}
+					      $nnet_dir data/${task}_mfcc \
+					      $nnet_dir/xvectors_${task}
     done
     # Update json
-    for name in ${train_set} ${train_dev} ${recog_set}; do
-	local/update_json.sh ${dumpdir}/${name}/data.json ${nnet_dir}/xvectors_${name}/xvector.scp
+    for task in ${train_set} ${train_dev} ${recog_set}; do
+	local/update_json.sh ${dumpdir}/${task}/delta${do_delta}/data.json ${nnet_dir}/xvectors_${task}/xvector.scp
+    done
+    # Finally remove long utterances
+    # Also prepare only parallel data
+    for task in ${train_set} ${train_dev}; do
+	feat_dir=${dumpdir}/${task}/delta${do_delta}
+	python local/remove_longshort_utt.py \
+	    --max-input 1500 --max-output 300 \
+	    ${feat_dir}/data.json > ${feat_dir}/data_short.json
+	python local/prune_json.py ${feat_dir}/data_short.json > ${feat_dir}/data_short_p.json
     done
 fi
 exit
@@ -289,8 +301,8 @@ exit
 # You can skip this and remove --rnnlm option in the recognition (stage 5)
 lmexpdir=exp/train_rnnlm_2layer_bs256
 mkdir -p ${lmexpdir}
-if [ ${stage} -le 3 ]; then
-    echo "stage 3: LM Preparation"
+if [ ${stage} -le 4 ]; then
+    echo "stage 4: LM Preparation"
     lmdatadir=data/local/lm_train
     mkdir -p ${lmdatadir}
     text2token.py -s 1 -n 1 data/${train_set}_asr/text | cut -f 2- -d" " | perl -pe 's/\n/ <eos> /g' \
@@ -313,13 +325,13 @@ if [ ${stage} -le 3 ]; then
         --batchsize 256 \
         --dict ${dict}
 fi
-
+exit
 if [ -z ${tag} ]; then
-    expdir=exp/${train_set}_${etype}_e${elayers}_subsample${subsample}_unit${eunits}_proj${eprojs}_d${dlayers}_unit${dunits}_${atype}_adim_${adim}_aconvc${aconv_chans}_aconvf${aconv_filts}_mtlalpha${mtlalpha}_${opt}_bs${batchsize}_mli${maxlen_in}_mlo${maxlen_out}
+    expdir=exp/${train_set}_${data_type}_${etype}_e${elayers}_subsample${subsample}_unit${eunits}_proj${eprojs}_d${dlayers}_unit${dunits}_${atype}_adim_${adim}_aconvc${aconv_chans}_aconvf${aconv_filts}_mtlalpha${mtlalpha}_${opt}_bs${batchsize}_mli${maxlen_in}_mlo${maxlen_out}
     if ${do_delta}; then
         expdir=${expdir}_delta
     fi
-    expdir=${expdir}_taco2_enc${tts_embed_dim}
+    expdir=${expdir}/taco2_enc${tts_embed_dim}
     if [ ${tts_econv_layers} -gt 0 ];then
         expdir=${expdir}-${tts_econv_layers}x${tts_econv_filts}x${tts_econv_chans}
     fi
@@ -352,18 +364,12 @@ if [ -z ${tag} ]; then
     fi
     expdir=${expdir}_sd${seed}
 else
-    expdir=exp/${train_set}_${tag}
+    expdir=exp/${train_set}_${data_type}_${tag}
 fi
 mkdir -p ${expdir}
 
-if false; then
-local/remove_longshort_utt.py --max-input 1500 --max-output 300 \
-    ${feat_tr_dir}/data.json > ${feat_tr_dir}/${data_type}.json
-local/remove_longshort_utt.py --max-input 1500 --max-output 300 \
-    ${feat_dt_dir}/data.json > ${feat_dt_dir}/${data_type}.json
-fi
-if [ ${stage} -le 4 ]; then
-    echo "stage 4: Network Training"
+if [ ${stage} -le 5 ]; then
+    echo "stage 5: Network Training"
     ${cuda_cmd} --gpu ${ngpu} ${expdir}/train.log \
         asrtts_train.py \
         --ngpu ${ngpu} \
@@ -375,8 +381,8 @@ if [ ${stage} -le 4 ]; then
         --minibatches ${N} \
         --verbose ${verbose} \
         --resume ${resume} \
-        --train-json ${feat_tr_dir}/${data_type}.json \
-        --valid-json ${feat_dt_dir}/${data_type}.json \
+        --train-json ${dumpdir}/${train_set}/delta${do_delta}/${data_type}.json \
+        --valid-json ${dumpdir}/${train_dev}/delta${do_delta}/${data_type}.json \
         --etype ${etype} \
         --elayers ${elayers} \
         --eunits ${eunits} \
@@ -406,6 +412,7 @@ if [ ${stage} -le 4 ]; then
         --tts-aconv-chans ${tts_aconv_chans} \
         --tts-aconv-filts ${tts_aconv_filts} \
         --tts-cumulate_att_w ${tts_cumulate_att_w} \
+	--tts-use_speaker_embedding ${tts_use_speaker_embedding} \
         --tts-use_batch_norm ${tts_use_batch_norm} \
         --tts-use_concate ${tts_use_concate} \
         --tts-use_residual ${tts_use_residual} \
@@ -424,11 +431,12 @@ if [ ${stage} -le 4 ]; then
         --epochs ${epochs}
 fi
 
-if [ ${stage} -le 5 ]; then
-    echo "stage 5: Decoding"
+if [ ${stage} -le 6 ]; then
+    echo "stage 6: Decoding"
 
     for rtask in ${recog_set}; do
     (
+	rtask=${rtask}_asr
         decode_dir=decode_${rtask}_beam${beam_size}_e${recog_model}_p${penalty}_len${minlenratio}-${maxlenratio}_ctcw${ctc_weight}_rnnlm${lm_weight}
         feat_recog_dir=${dumpdir}/${rtask}/delta${do_delta}
 
