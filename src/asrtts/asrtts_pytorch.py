@@ -59,16 +59,17 @@ REPORT_INTERVAL = 10
 ALL_MODE = False
 FREEZE_ATT = True
 
-def converter_kaldi(batch, device=None):
+def converter_kaldi(batch, device=None, use_speaker_embedding=None):
     # batch only has one minibatch utterance, which is specified by batch[0]
     batch = batch[0]
     for data in batch:
         feat_asr = kaldi_io_py.read_mat(data[1]['input'][0]['feat'])
         feat_tts = kaldi_io_py.read_mat(data[1]['input'][1]['feat'])
-        feat_spembs = kaldi_io_py.read_vec_flt(data[1]['input'][2]['feat'])
         data[1]['feat_asr'] = feat_asr
         data[1]['feat_tts'] = feat_tts
-        data[1]['feat_spembs'] = feat_spembs
+        if use_speaker_embedding is not None:
+            feat_spembs = kaldi_io_py.read_vec_flt(data[1]['input'][2]['feat'])
+            data[1]['feat_spembs'] = feat_spembs
 
     return batch
 
@@ -77,7 +78,8 @@ def delete_feat(batch):
     for data in batch:
         del data[1]['feat_asr']
         del data[1]['feat_tts']
-        del data[1]['feat_spembs']
+        if 'feat_spembs' in data[1]:
+            del data[1]['feat_spembs']
 
     return batch
 
@@ -112,12 +114,13 @@ class CustomEvaluater(extensions.Evaluator):
                 # read scp files
                 # x: original json with loaded features
                 #    will be converted to chainer variable later
-                data = self.converter(batch)
+                data = self.converter(batch, use_speaker_embedding=self.model.tts_loss.model.spk_embed_dim)
                 self.model.eval()
                 if data[0][1]['utt2mode'] != 'p':
                     logging.error("Error: evaluation only support a parallel data mode ('p')")
                     sys.exit()
-                tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens, spembs = get_tts_data(self.model, data, 'text')
+                tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens, spembs = \
+                    get_tts_data(self.model, data, 'text', use_speaker_embedding=self.model.tts_loss.model.spk_embed_dim)
                 avg_textlen = float(np.mean(tts_textlens.data.cpu().numpy()))
 
                 asr_loss, asr_acc = self.model.asr_loss(data, do_report=False, report_acc=True)  # disable reporter
@@ -212,10 +215,11 @@ class CustomUpdater(training.StandardUpdater):
         if len(batch[0]) < self.num_gpu:
             logging.warning('batch size is less than number of gpus. Ignored')
             return
-        data = self.converter(batch)
+        data = self.converter(batch, use_speaker_embedding=self.model.tts_loss.model.spk_embed_dim)
 
         # Compute the loss at this time step and accumulate it
-        tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens, spembs = get_tts_data(self.model, data, 'text')
+        tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens, spembs = \
+            get_tts_data(self.model, data, 'text', use_speaker_embedding=self.model.tts_loss.model.spk_embed_dim)
         avg_textlen = float(np.mean(tts_textlens.data.cpu().numpy()))
         if data[0][1]['utt2mode'] == 'p':
             logging.info("parallel data mode")
@@ -539,7 +543,7 @@ def train(args):
     if args.num_save_attention > 0 and args.mtlalpha != 1.0:
         data = sorted(list(valid_json.items())[:args.num_save_attention],
                       key=lambda x: int(x[1]['input'][0]['shape'][1]), reverse=True)
-        data = converter_kaldi([data], device=gpu_id)
+        data = converter_kaldi([data], device=gpu_id, use_speaker_embedding=args.tts_spk_embed_dim)
         trainer.extend(PlotAttentionReport(asr_loss, data, args.outdir + "/att_ws_asr"), trigger=(1, 'epoch'))
         trainer.extend(PlotAttentionReport(e2e_tts, data, args.outdir + "/att_ws_tts",
                                            CustomConverter(gpu_id, False), True), trigger=(1, 'epoch'))
