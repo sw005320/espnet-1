@@ -58,7 +58,7 @@ matplotlib.use('Agg')
 
 # some tuning params
 REPORT_INTERVAL = 10
-ALL_MODE = True
+ALL_MODE = False
 FREEZE_ATT = True
 
 class CustomEvaluater(extensions.Evaluator):
@@ -155,8 +155,8 @@ class CustomUpdater(training.StandardUpdater):
         else:
             self.clip_grad_norm = torch.nn.utils.clip_grad_norm_
 
-    def gradient_decent(self, loss, optimizer):
-        if FREEZE_ATT:
+    def gradient_decent(self, loss, optimizer, freeze_att=False):
+        if freeze_att:
             update_parameters(self.model.tts_loss.model.dec.att, False)
             update_parameters(self.model.asr_loss.predictor.att, False)
 
@@ -171,7 +171,7 @@ class CustomUpdater(training.StandardUpdater):
         else:
             optimizer.step()
 
-        if FREEZE_ATT:
+        if freeze_att:
             update_parameters(self.model.tts_loss.model.dec.att, True)
             update_parameters(self.model.asr_loss.predictor.att, True)
 
@@ -212,24 +212,27 @@ class CustomUpdater(training.StandardUpdater):
                     asr_loss_data = loss.data[0] if torch_is_old else loss.item()
                     loss_data_sum += asr_loss_data
                     logging.info("asr_loss_data: %f", asr_loss_data)
+                    self.gradient_decent(loss, self.opts[mode])
                 if mode == 'tts':
                     loss = self.model.tts_loss(tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens, do_report=False)
                     tts_loss_data = loss.data[0] if torch_is_old else loss.item()
                     loss_data_sum += tts_loss_data
                     logging.info("tts_loss_data: %f", tts_loss_data)
+                    self.gradient_decent(loss, self.opts[mode])
                 if mode == 's2s':
                     loss = self.model.ae_speech(data)
                     s2s_loss_data = loss.data[0] if torch_is_old else loss.item()
                     loss_data_sum += s2s_loss_data
                     logging.info("s2s_loss_data: %f", s2s_loss_data)
+                    self.gradient_decent(loss, self.opts[mode], freeze_att=FREEZE_ATT)
                 if mode == 't2t':
                     loss, t2t_acc = self.model.ae_text(data)
                     loss = loss/avg_textlen
                     t2t_loss_data = loss.data[0] if torch_is_old else loss.item()
                     loss_data_sum += t2t_loss_data
                     logging.info("t2t_loss_data: %f", t2t_loss_data)
+                    self.gradient_decent(loss, self.opts[mode], freeze_att=FREEZE_ATT)
                 logging.info("loss_data_sum: %f", loss_data_sum)
-                self.gradient_decent(loss, self.opts[mode])
             if ALL_MODE:
                 loss_data = loss_data_sum / 4.0
             else:
@@ -248,7 +251,7 @@ class CustomUpdater(training.StandardUpdater):
             logging.info("audio only mode")
             s2s_loss = self.model.ae_speech(data)
             loss = s2s_loss
-            self.gradient_decent(loss, self.opts['s2s'])
+            self.gradient_decent(loss, self.opts['s2s'], freeze_att=FREEZE_ATT)
 
             loss_data = loss.data[0] if torch_is_old else loss.item()
             logging.info("loss: %f", loss_data)
@@ -258,7 +261,7 @@ class CustomUpdater(training.StandardUpdater):
             logging.info("text only mode")
             t2t_loss, t2t_acc = self.model.ae_text(data)
             loss = t2t_loss / avg_textlen
-            self.gradient_decent(loss, self.opts['t2t'])
+            self.gradient_decent(loss, self.opts['t2t'], freeze_att=FREEZE_ATT)
 
             loss_data = loss.data[0] if torch_is_old else loss.item()
             logging.info("loss: %f", loss_data)
