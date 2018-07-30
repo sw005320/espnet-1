@@ -492,13 +492,11 @@ def train(args):
     # Setup an optimizer
     dummy_target = chainer.Chain()
     opts = {}
-    opts_keys = ['asr', 'tts', 's2s', 't2t']
-    for key in opts_keys:
-        if args.opt == 'adadelta':
-            opts[key] = torch.optim.Adadelta(model.parameters(), rho=0.95, eps=args.eps)
-        elif args.opt == 'adam':
-            opts[key] = torch.optim.Adam(model.parameters(), args.lr, eps=args.eps, weight_decay=args.weight_decay)
-
+    opts['asr'] = torch.optim.Adadelta(model.parameters(), rho=0.95, eps=args.eps)
+    opts['tts'] = torch.optim.Adam(model.parameters(), args.lr, eps=args.eps, weight_decay=args.weight_decay)
+    opts['s2s'] = torch.optim.Adam(model.parameters(), args.lr, eps=args.eps, weight_decay=args.weight_decay)
+    opts['t2t'] = torch.optim.Adam(model.parameters(), args.lr, eps=args.eps, weight_decay=args.weight_decay)
+    for key in ['asr', 'tts', 's2s', 't2t']:
         # FIXME: TOO DIRTY HACK
         setattr(opts[key], "target", dummy_target)
         setattr(opts[key], "serialize", lambda s: dummy_target.serialize(s))
@@ -572,32 +570,12 @@ def train(args):
     trainer.extend(extensions.snapshot_object(model, 'model.loss.best', savefun=torch_save),
                    trigger=training.triggers.MinValueTrigger('d/loss'))
 
-    # epsilon decay in the optimizer
     def torch_load(path, obj):
         if ngpu > 1:
             model.module.load_state_dict(torch.load(path))
         else:
             model.load_state_dict(torch.load(path))
         return obj
-    if args.opt == 'adadelta':
-        if args.criterion == 'acc' and mtl_mode is not 'ctc':
-            trainer.extend(restore_snapshot(model, args.outdir + '/model.acc.best', load_fn=torch_load),
-                           trigger=CompareValueTrigger(
-                               'd/asr_acc',
-                               lambda best_value, current_value: best_value > current_value))
-            trainer.extend(adadelta_eps_decay(args.eps_decay),
-                           trigger=CompareValueTrigger(
-                               'd/asr_acc',
-                               lambda best_value, current_value: best_value > current_value))
-        elif args.criterion == 'loss':
-            trainer.extend(restore_snapshot(model, args.outdir + '/model.loss.best', load_fn=torch_load),
-                           trigger=CompareValueTrigger(
-                               'd/loss',
-                               lambda best_value, current_value: best_value < current_value))
-            trainer.extend(adadelta_eps_decay(args.eps_decay),
-                           trigger=CompareValueTrigger(
-                               'd/loss',
-                               lambda best_value, current_value: best_value < current_value))
 
     # Write a log of evaluation statistics for each epoch
     trainer.extend(extensions.LogReport(trigger=(REPORT_INTERVAL, 'iteration')))
@@ -606,13 +584,7 @@ def train(args):
     report_keys.append('epoch')
     report_keys.append('iteration')
     report_keys.append('elapsed_time')
-    if args.opt == 'adadelta':
-        trainer.extend(extensions.observe_value(
-            'eps', lambda trainer: trainer.updater.get_optimizer('main').param_groups[0]["eps"]),
-            trigger=(REPORT_INTERVAL, 'iteration'))
-        report_keys.append('eps')
-    trainer.extend(extensions.PrintReport(
-        report_keys), trigger=(REPORT_INTERVAL, 'iteration'))
+    trainer.extend(extensions.PrintReport(report_keys), trigger=(REPORT_INTERVAL, 'iteration'))
 
     trainer.extend(extensions.ProgressBar(update_interval=REPORT_INTERVAL))
 
