@@ -65,7 +65,7 @@ if __name__ == '__main__':
             if k == 'ilen':
                 in_dic[unicode('shape', 'utf-8')] = \
                     (int(dic[unicode('ilen', 'utf-8')]), int(dic[unicode('idim', 'utf-8')]))
-            elif k == 'ilen':
+            elif k == 'idim':
                 pass
             elif k == 'feat':
                 in_dic[unicode('feat', 'utf-8')] = dic[unicode('feat', 'utf-8')]

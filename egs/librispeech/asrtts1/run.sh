@@ -11,6 +11,7 @@ backend=pytorch
 stage=-1       # start from -1 if you need to start from data download
 gpu=           # will be deprecated, please use ngpu
 ngpu=0         # number of gpus ("0" uses cpu, otherwise use gpu)
+nj=32
 debugmode=1
 dumpdir=dump   # directory to dump full features
 N=0            # number of minibatches to be used (mainly for debugging). "0" uses all minibatches.
@@ -24,9 +25,9 @@ fs=16000       # sampling frequency
 fmax=""        # maximum frequency
 fmin=""        # minimum frequency
 n_mels=80      # number of mel basis
-n_fft=512      # number of fft points
-n_shift=160    # number of shift points
-win_length=400 # number of samples in analysis window
+n_fft=1024     # number of fft points
+n_shift=512    # number of shift points
+win_length=""  # number of samples in analysis window
 
 # ASR network archtecture
 # encoder related
@@ -90,7 +91,7 @@ opt=adam
 lr=1e-3
 eps=1e-6
 weight_decay=0.0
-epochs=20
+epochs=30
 
 # rnnlm related
 lm_weight=0.3
@@ -106,7 +107,7 @@ recog_model=loss.best # set a model to be used for decoding: 'acc.best' or 'loss
 # Set this to somewhere where you want to put your data, or where
 # someone else has already put it.  You'll want to change this
 # if you're not on the CLSP grid.
-datadir=/home/ubuntu/work/201707e2e/data/librispeech
+datadir=/export/a15/vpanayotov/data
 
 # base url for downloads.
 data_url=www.openslr.org/resources/12
@@ -138,8 +139,8 @@ set -e
 set -u
 set -o pipefail
 
-train_set=train_960_tts
-train_dev=dev_tts
+train_set=train_960
+train_dev=dev
 recog_set="test_clean test_other dev_clean dev_other"
 
 if [ ${stage} -le -1 ]; then
@@ -155,94 +156,135 @@ if [ ${stage} -le 0 ]; then
     echo "stage 0: Data preparation"
     for part in dev-clean test-clean dev-other test-other train-clean-100 train-clean-360 train-other-500; do
         # use underscore-separated names in data directories.
+        local/data_prep.sh ${datadir}/LibriSpeech/${part} data/$(echo ${part} | sed s/-/_/g)_asr
         local/data_prep.sh ${datadir}/LibriSpeech/${part} data/$(echo ${part} | sed s/-/_/g)_tts
     done
 fi
 
-feat_tr_dir=${dumpdir}/${train_set}/delta${do_delta}; mkdir -p ${feat_tr_dir}
-feat_dt_dir=${dumpdir}/${train_dev}/delta${do_delta}; mkdir -p ${feat_dt_dir}
 if [ ${stage} -le 1 ]; then
     ### Task dependent. You have to design training and dev sets by yourself.
     ### But you can utilize Kaldi recipes in most cases
     echo "stage 1: Feature Generation"
-    fbankdir=fbank_tts
+    fbankdir=fbank_asr
     # Generate the fbank features; by default 80-dimensional fbanks with pitch on each frame
     for x in dev_clean test_clean dev_other test_other train_clean_100 train_clean_360 train_other_500; do
-	local/make_fbank.sh --cmd "${train_cmd}" --nj 32 \
-			    --fs ${fs} --fmax "${fmax}" --fmin "${fmin}" --win_length ${win_length} \
-			    --n_mels ${n_mels} --n_fft ${n_fft} --n_shift ${n_shift} \
-			    data/${x}_tts exp/make_fbank/${x} ${fbankdir}
+	x=${x}_asr
+	steps/make_fbank_pitch.sh --cmd "$train_cmd" --nj ${nj} data/${x} exp/make_fbank/${x} ${fbankdir}
+    done
+    fbankdir=fbank_tts
+    for x in dev_clean test_clean dev_other test_other train_clean_100 train_clean_360 train_other_500; do
+	x=${x}_tts
+	make_fbank.sh --cmd "${train_cmd}" --nj ${nj} \
+		      --fs ${fs} \
+		      --fmax "${fmax}" \
+		      --fmin "${fmin}" \
+		      --n_fft ${n_fft} \
+		      --n_shift ${n_shift} \
+		      --win_length "${win_length}" \
+		      --n_mels ${n_mels} \
+		      data/${x} \
+		      exp/make_fbank/${x} \
+		      ${fbankdir}
     done
 
-    utils/combine_data.sh data/train_960_tts data/train_clean_100_tts data/train_clean_360_tts data/train_other_500_tts
-    utils/combine_data.sh data/dev_tts data/dev_clean_tts data/dev_other_tts
-    # remove utt having more than 3000 frames
-    # remove utt having more than 400 characters
-    utils/copy_data_dir.sh data/${train_set} data/${train_set}_org
-    utils/copy_data_dir.sh data/${train_dev} data/${train_dev}_org
+    for mode in asr tts; do
+	utils/combine_data.sh data/${train_set}_${mode} data/train_clean_100_${mode} data/train_clean_360_${mode} data/train_other_500_${mode}
+	utils/combine_data.sh data/${train_dev}_${mode} data/dev_clean_${mode} data/dev_other_${mode}
 
-    remove_longshortdata.sh --maxframes 3000 --maxchars 400 data/${train_set}_org data/${train_set}
-    remove_longshortdata.sh --maxframes 3000 --maxchars 400 data/${train_dev}_org data/${train_dev}
+	# compute global CMVN
+	# make sure that we only use the pair data for global normalization
+	compute-cmvn-stats scp:data/train_clean_100_${mode}/feats.scp data/train_clean_100_${mode}/cmvn.ark
 
-    # compute global CMVN
-    # make sure that we only use the pair data for global normalization
-    compute-cmvn-stats scp:data/train_clean_100_tts/feats.scp data/train_clean_100_tts/cmvn.ark
-
-    # dump features for training
-    if [[ $(hostname -f) == *.clsp.jhu.edu ]] && [ ! -d ${feat_tr_dir}/storage ]; then
-    utils/create_split_dir.pl \
-        /export/b{14,15,16,18}/${USER}/espnet-data/egs/librispeech/asrtts1/dump/${train_set}/delta${do_delta}/storage \
-        ${feat_tr_dir}/storage
-    fi
-    if [[ $(hostname -f) == *.clsp.jhu.edu ]] && [ ! -d ${feat_dt_dir}/storage ]; then
-    utils/create_split_dir.pl \
-        /export/b{14,15,16,18}/${USER}/espnet-data/egs/librispeech/asrtts1/dump/${train_dev}/delta${do_delta}/storage \
-        ${feat_dt_dir}/storage
-    fi
-
-    dump.sh --cmd "$train_cmd" --nj 80 --do_delta ${do_delta} \
-        data/${train_set}/feats.scp data/train_clean_100_tts/cmvn.ark exp/dump_feats/train_tts ${feat_tr_dir}
-    dump.sh --cmd "$train_cmd" --nj 32 --do_delta ${do_delta} \
-        data/${train_dev}/feats.scp data/train_clean_100_tts/cmvn.ark exp/dump_feats/dev_tts ${feat_dt_dir}
-    for rtask in ${recog_set}; do
-        feat_recog_dir=${dumpdir}/${rtask}/delta${do_delta}; mkdir -p ${feat_recog_dir}
-        dump.sh --cmd "$train_cmd" --nj 32 --do_delta ${do_delta} \
-            data/${rtask}_tts/feats.scp data/train_clean_100_tts/cmvn.ark exp/dump_feats/recog_tts/${rtask} \
-            ${feat_recog_dir}
+	# dump features for training
+	for task in ${train_set} ${train_dev} ${recog_set}; do
+	    feat_dir=${dumpdir}/${task}_${mode}/delta${do_delta}; mkdir -p ${feat_dir}
+	    if [[ $(hostname -f) == *.clsp.jhu.edu ]] && [ ! -d ${feat_dir}/storage ]; then
+		utils/create_split_dir.pl \
+		    /export/b{14,15,16,18}/${USER}/espnet-data/egs/librispeech/asrtts1/dump/${task}_${mode}/delta${do_delta}/storage \
+		    ${feat_dir}/storage
+	    fi
+	    dump.sh --cmd "$train_cmd" --nj ${nj} --do_delta ${do_delta} \
+		    data/${task}_${mode}/feats.scp data/train_clean_100_${mode}/cmvn.ark exp/dump_feats/${task}_${mode} ${feat_dir}
+	done
     done
 fi
-
-dict=data/lang_1char/train_clean_100_tts_units.txt
+exit
+feat_tr_dir=${dumpdir}/${train_set}/delta${do_delta}; mkdir -p ${feat_tr_dir}
+feat_dt_dir=${dumpdir}/${train_dev}/delta${do_delta}; mkdir -p ${feat_dt_dir}
+dict=data/lang_1char/train_clean_100_units.txt
 echo "dictionary: ${dict}"
 if [ ${stage} -le 2 ]; then
     ### Task dependent. You have to check non-linguistic symbols used in the corpus.
     echo "stage 2: Dictionary and Json Data Preparation"
     mkdir -p data/lang_1char/
     echo "<unk> 1" > ${dict} # <unk> must be 1, 0 will be used for "blank" in CTC
-    text2token.py -s 1 -n 1 data/train_clean_100_tts/text | cut -f 2- -d" " | tr " " "\n" \
+    text2token.py -s 1 -n 1 data/train_clean_100_asr/text | cut -f 2- -d" " | tr " " "\n" \
     | sort | uniq | grep -v -e '^\s*$' | awk '{print $0 " " NR+1}' >> ${dict}
     wc -l ${dict}
 
     # add mode
     # train_clean_100 for pair data, train_clean_360 for audio only, train_other_500 and/or train_clean_360
-    awk '{print $1 " p"}' data/train_clean_100_tts/utt2spk >  data/${train_set}/utt2mode.scp
-    awk '{print $1 " a"}' data/train_clean_360_tts/utt2spk >> data/${train_set}/utt2mode.scp
-    awk '{print $1 " t"}' data/train_other_500_tts/utt2spk >> data/${train_set}/utt2mode.scp
-    # dev set has pair data
-    awk '{print $1 " p"}' data/${train_dev}/utt2spk >  data/${train_dev}/utt2mode.scp
-
-
-    # make json labels
-    data2json.sh --feat ${feat_tr_dir}/feats.scp --scps data/${train_set}/utt2mode.scp \
-         data/${train_set} ${dict} > ${feat_tr_dir}/data.json
-    data2json.sh --feat ${feat_dt_dir}/feats.scp --scps data/${train_dev}/utt2mode.scp \
-         data/${train_dev} ${dict} > ${feat_dt_dir}/data.json
-    for rtask in ${recog_set}; do
-        feat_recog_dir=${dumpdir}/${rtask}/delta${do_delta}
-        data2json.sh --feat ${feat_recog_dir}/feats.scp \
-            data/${rtask}_tts ${dict} > ${feat_recog_dir}/data.json
+    for mode in asr tts; do
+	awk '{print $1 " p"}' data/train_clean_100_${mode}/utt2spk >  data/${train_set}_${mode}/utt2mode.scp
+	awk '{print $1 " a"}' data/train_clean_360_${mode}/utt2spk >> data/${train_set}_${mode}/utt2mode.scp
+	awk '{print $1 " t"}' data/train_other_500_${mode}/utt2spk >> data/${train_set}_${mode}/utt2mode.scp
+	# dev set has pair data
+	awk '{print $1 " p"}' data/${train_dev}_${mode}/utt2spk > data/${train_dev}_${mode}/utt2mode.scp
+    
+	# make json labels
+	for task in ${train_set} ${train_dev}; do
+	    feat_dir=${dumpdir}/${task}_${mode}/delta${do_delta}
+	    data2json.sh --feat ${feat_dir}/feats.scp --scps data/${task}_${mode}/utt2mode.scp \
+			 data/${task}_${mode} ${dict} > ${feat_dir}/data.json
+	done
+	for task in ${recog_set}; do
+	    feat_dir=${dumpdir}/${task}_${mode}/delta${do_delta}
+            data2json.sh --feat ${feat_dir}/feats.scp \
+			 data/${task}_${mode} ${dict} > ${feat_dir}/data.json
+	done
     done
 fi
+exit
+
+
+if [ ${stage} -le 3 ]; then
+    echo "stage 3: x-vector extraction"
+    # Make MFCCs and compute the energy-based VAD for each dataset
+    mfccdir=mfcc
+    vaddir=mfcc
+    for name in ${train_set} ${train_dev} ${recog_set}; do
+	utils/copy_data_dir.sh data/${name}_asr data/${name}_mfcc
+	steps/make_mfcc.sh \
+	    --write-utt2num-frames true \
+	    --mfcc-config conf/mfcc.conf \
+	    --nj ${nj} --cmd "$train_cmd" \
+	    data/${name}_mfcc exp/make_mfcc $mfccdir
+	utils/fix_data_dir.sh data/${name}_mfcc
+	sid/compute_vad_decision.sh --nj ${nj} --cmd "$train_cmd" \
+				    data/${name}_mfcc exp/make_vad ${vaddir}
+	utils/fix_data_dir.sh data/${name}_mfcc
+    done
+    # Check pretrained model existence
+    nnet_dir=exp/xvector_nnet_1a
+    if [ ! -e $nnet_dir ];then
+	echo "X-vector model does not exist. Download pre-trained model."
+	wget http://kaldi-asr.org/models/8/0008_sitw_v2_1a.tar.gz
+	tar xvf 0008_sitw_v2_1a.tar.gz
+	mv 0008_sitw_v2_1a/exp/xvector_nnet_1a exp
+	rm -rf 0008_sitw_v2_1a.tar.gz 0008_sitw_v2_1a
+    fi
+    # Extract x-vector
+    for name in ${train_set} ${train_dev} ${recog_set}; do
+	sid/nnet3/xvector/extract_xvectors.sh --cmd "$train_cmd --mem 4G" --nj ${nj} \
+					      $nnet_dir data/${name}_mfcc \
+					      $nnet_dir/xvectors_${name}
+    done
+    # Update json
+    for name in ${train_set} ${train_dev} ${recog_set}; do
+	local/update_json.sh ${dumpdir}/${name}/data.json ${nnet_dir}/xvectors_${name}/xvector.scp
+    done
+fi
+exit
 
 # You can skip this and remove --rnnlm option in the recognition (stage 5)
 lmexpdir=exp/train_rnnlm_2layer_bs256
@@ -251,9 +293,9 @@ if [ ${stage} -le 3 ]; then
     echo "stage 3: LM Preparation"
     lmdatadir=data/local/lm_train
     mkdir -p ${lmdatadir}
-    text2token.py -s 1 -n 1 data/${train_set}/text | cut -f 2- -d" " | perl -pe 's/\n/ <eos> /g' \
+    text2token.py -s 1 -n 1 data/${train_set}_asr/text | cut -f 2- -d" " | perl -pe 's/\n/ <eos> /g' \
         > ${lmdatadir}/train.txt
-    text2token.py -s 1 -n 1 data/${train_dev}/text | cut -f 2- -d" " | perl -pe 's/\n/ <eos> /g' \
+    text2token.py -s 1 -n 1 data/${train_dev}_asr/text | cut -f 2- -d" " | perl -pe 's/\n/ <eos> /g' \
         > ${lmdatadir}/valid.txt
     # use only 1 gpu
     if [ ${ngpu} -gt 1 ]; then
@@ -384,7 +426,6 @@ fi
 
 if [ ${stage} -le 5 ]; then
     echo "stage 5: Decoding"
-    nj=8
 
     for rtask in ${recog_set}; do
     (
