@@ -20,9 +20,11 @@ import chainer
 from chainer import reporter as reporter_module
 from chainer import training
 from chainer.training import extensions
+from chainer.training import extension
 
 # torch related
 import torch
+from torch.autograd import Variable
 
 # spnet related
 from asr_utils import adadelta_eps_decay
@@ -31,7 +33,7 @@ from asr_utils import load_labeldict
 from asr_utils import make_batchset
 from asr_utils import restore_snapshot
 
-from tts_pytorch import CustomConverter
+from tts_pytorch import pad_ndarray_list
 
 from e2e_asr_attctc_th import E2E
 from e2e_asr_attctc_th import Loss
@@ -57,6 +59,79 @@ matplotlib.use('Agg')
 REPORT_INTERVAL = 10
 ALL_MODE = False
 FREEZE_ATT = True
+
+
+class CustomConverter(object):
+    '''CUSTOM CONVERTER FOR TACOTRON2'''
+
+    def __init__(self, device, return_targets=True, use_speaker_embedding=False, spembs_dim=1):
+        self.device = device
+        self.return_targets = return_targets
+        self.use_speaker_embedding = use_speaker_embedding
+        self.spembs_dim = spembs_dim
+
+    def __call__(self, batch, is_training=True):
+        # batch should be located in list
+        assert len(batch) == 1
+        batch = batch[0]
+
+        # get eos
+        eos = str(int(batch[0][1]['output'][0]['shape'][1]) - 1)
+
+        # get target features and input character sequence
+        xs = [b[1]['output'][0]['tokenid'].split() + [eos] for b in batch]
+        ys = [kaldi_io_py.read_mat(b[1]['input'][1]['feat']) for b in batch]
+
+        # remove empty sequence and get sort along with length
+        filtered_idx = filter(lambda i: len(xs[i]) > 0, range(len(xs)))
+        sorted_idx = sorted(filtered_idx, key=lambda i: -len(xs[i]))
+        xs = [np.fromiter(map(int, xs[i]), dtype=np.int64) for i in sorted_idx]
+        ys = [ys[i] for i in sorted_idx]
+
+        # get list of lengths (must be tensor for DataParallel)
+        ilens = torch.from_numpy(np.fromiter((x.shape[0] for x in xs), dtype=np.int64))
+        olens = torch.from_numpy(np.fromiter((y.shape[0] for y in ys), dtype=np.int64))
+
+        # perform padding and convert to tensor
+        xs = torch.from_numpy(pad_ndarray_list(xs, 0)).long()
+        ys = torch.from_numpy(pad_ndarray_list(ys, 0)).float()
+
+        # make labels for stop prediction
+        labels = ys.new(ys.size(0), ys.size(1)).zero_()
+        for i, l in enumerate(olens):
+            labels[i, l - 1:] = 1
+
+        # TODO(kan-bayashi): need to be fixed in pytorch v4
+        if torch_is_old:
+            xs = Variable(xs, volatile=not is_training)
+            ys = Variable(ys, volatile=not is_training)
+            labels = Variable(labels, volatile=not is_training)
+
+        if sum(self.device) >= 0:
+            xs = xs.cuda()
+            ys = ys.cuda()
+            labels = labels.cuda()
+
+        # load speaker embedding
+        if self.use_speaker_embedding:
+            ### spembs = [kaldi_io_py.read_vec_flt(b[1]['input'][1]['feat']) for b in batch]
+            spembs = [kaldi_io_py.read_vec_flt(b[1]['input'][self.spembs_dim]['feat']) for b in batch]
+            spembs = [spembs[i] for i in sorted_idx]
+            spembs = torch.from_numpy(np.array(spembs)).float()
+
+            # TODO(kan-bayashi): need to be fixed in pytorch v4
+            if torch_is_old:
+                spembs = Variable(spembs, volatile=not is_training)
+            if sum(self.device) >= 0:
+                spembs = spembs.cuda()
+        else:
+            spembs = None
+
+        if self.return_targets:
+            return xs, ilens, ys, labels, olens, spembs
+        else:
+            return xs, ilens, ys, spembs
+
 
 class PlotAttentionReport(extension.Extension):
     def __init__(self, model, data, outdir, converter=None, reverse=False):
