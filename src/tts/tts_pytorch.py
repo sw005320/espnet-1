@@ -113,10 +113,11 @@ class CustomUpdater(training.StandardUpdater):
 class CustomConverter(object):
     '''CUSTOM CONVERTER FOR TACOTRON2'''
 
-    def __init__(self, device, return_targets=True, use_speaker_embedding=False):
+    def __init__(self, device, return_targets=True, use_speaker_embedding=False, spembs_dim=1):
         self.device = device
         self.return_targets = return_targets
         self.use_speaker_embedding = use_speaker_embedding
+        self.spembs_dim = spembs_dim
 
     def __call__(self, batch, is_training=True):
         # batch should be located in list
@@ -129,7 +130,7 @@ class CustomConverter(object):
         # get target features and input character sequence
         xs = [b[1]['output'][0]['tokenid'].split() + [eos] for b in batch]
         ys = [kaldi_io_py.read_mat(b[1]['input'][0]['feat']) for b in batch]
-
+            
         # remove empty sequence and get sort along with length
         filtered_idx = filter(lambda i: len(xs[i]) > 0, range(len(xs)))
         sorted_idx = sorted(filtered_idx, key=lambda i: -len(xs[i]))
@@ -162,7 +163,8 @@ class CustomConverter(object):
 
         # load speaker embedding
         if self.use_speaker_embedding:
-            spembs = [kaldi_io_py.read_vec_flt(b[1]['input'][1]['feat']) for b in batch]
+            ### spembs = [kaldi_io_py.read_vec_flt(b[1]['input'][1]['feat']) for b in batch]
+            spembs = [kaldi_io_py.read_vec_flt(b[1]['input'][self.spembs_dim]['feat']) for b in batch]
             spembs = [spembs[i] for i in sorted_idx]
             spembs = torch.from_numpy(np.array(spembs)).float()
 
