@@ -81,9 +81,13 @@ if __name__ == '__main__':
             in_add_dic['name'] = 'input%d' % (len(input_list) + 1)
 
             input_list.append(in_add_dic)
-            new_dic[id] = {'input': input_list,
-                           'output': orgdic['output'],
-                           'utt2spk': orgdic['utt2spk']}
+            new_dic[id] = {}
+            for key in orgdic.keys():
+                if key == 'input':
+                    new_dic[id][key] = input_list
+                else:
+                    new_dic[id][key] = orgdic[key]
+                    
         # add as output
         else:
             # original output
@@ -105,9 +109,12 @@ if __name__ == '__main__':
             out_add_dic['name'] = 'target%d' % (len(output_list) + 1)
 
             output_list.append(out_add_dic)
-            new_dic[id] = {'input': orgdic['input'],
-                           'output': output_list,
-                           'utt2spk': orgdic['utt2spk']}
+            new_dic[id] = {}
+            for key in orgdic.keys():
+                if key == 'output':
+                    new_dic[id][key] = output_list
+                else:
+                    new_dic[id][key] = orgdic[key]
 
     # ensure "ensure_ascii=False", which is a bug
     jsonstring = json.dumps(
