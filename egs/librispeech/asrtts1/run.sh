@@ -268,7 +268,7 @@ if [ ${stage} -le 3 ]; then
 	utils/fix_data_dir.sh data/${task}_mfcc
     done
     # Check pretrained model existence
-    nnet_dir=exp/xvector_nnet_1a
+    nnet_dir=$PWD/exp/xvector_nnet_1a
     if [ ! -e $nnet_dir ];then
 	echo "X-vector model does not exist. Download pre-trained model."
 	wget http://kaldi-asr.org/models/8/0008_sitw_v2_1a.tar.gz
@@ -296,7 +296,6 @@ if [ ${stage} -le 3 ]; then
 	python local/prune_json.py ${feat_dir}/data_short.json > ${feat_dir}/data_short_p.json
     done
 fi
-exit
 
 # You can skip this and remove --rnnlm option in the recognition (stage 5)
 lmexpdir=exp/train_rnnlm_2layer_bs256
@@ -325,7 +324,7 @@ if [ ${stage} -le 4 ]; then
         --batchsize 256 \
         --dict ${dict}
 fi
-exit
+
 if [ -z ${tag} ]; then
     expdir=exp/${train_set}_${data_type}_${etype}_e${elayers}_subsample${subsample}_unit${eunits}_proj${eprojs}_d${dlayers}_unit${dunits}_${atype}_adim_${adim}_aconvc${aconv_chans}_aconvf${aconv_filts}_mtlalpha${mtlalpha}_${opt}_bs${batchsize}_mli${maxlen_in}_mlo${maxlen_out}
     if ${do_delta}; then
@@ -412,7 +411,7 @@ if [ ${stage} -le 5 ]; then
         --tts-aconv-chans ${tts_aconv_chans} \
         --tts-aconv-filts ${tts_aconv_filts} \
         --tts-cumulate_att_w ${tts_cumulate_att_w} \
-	--tts-use_speaker_embedding ${tts_use_speaker_embedding} \
+        --tts-use_speaker_embedding ${tts_use_speaker_embedding} \
         --tts-use_batch_norm ${tts_use_batch_norm} \
         --tts-use_concate ${tts_use_concate} \
         --tts-use_residual ${tts_use_residual} \
