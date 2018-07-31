@@ -29,7 +29,6 @@ from asr_utils import adadelta_eps_decay
 from asr_utils import CompareValueTrigger
 from asr_utils import load_labeldict
 from asr_utils import make_batchset
-from asr_utils import PlotAttentionReport
 from asr_utils import restore_snapshot
 
 from tts_pytorch import CustomConverter
@@ -59,6 +58,72 @@ REPORT_INTERVAL = 10
 ALL_MODE = False
 FREEZE_ATT = True
 
+class PlotAttentionReport(extension.Extension):
+    def __init__(self, model, data, outdir, converter=None, reverse=False):
+        self.data = copy.deepcopy(data)
+        self.outdir = outdir
+        self.converter = converter
+        self.reverse = reverse
+        if not os.path.exists(self.outdir):
+            os.makedirs(self.outdir)
+
+        # TODO(kan-bayashi): clean up this process
+        if hasattr(model, "module"):
+            if hasattr(model.module, "predictor"):
+                self.att_vis_fn = model.module.predictor.calculate_all_attentions
+            else:
+                self.att_vis_fn = model.module.calculate_all_attentions
+        else:
+            if hasattr(model, "predictor"):
+                self.att_vis_fn = model.predictor.calculate_all_attentions
+            else:
+                self.att_vis_fn = model.calculate_all_attentions
+
+    def __call__(self, trainer):
+        if self.converter is not None:
+            # TODO(kan-bayashi): need to be fixed due to hard coding
+            x = self.converter([self.data], False)
+        else:
+            x = self.data
+        if isinstance(x, tuple):
+            att_ws = self.att_vis_fn(*x)
+        elif isinstance(x, dict):
+            att_ws = self.att_vis_fn(**x)
+        else:
+            att_ws = self.att_vis_fn(x)
+        for idx, att_w in enumerate(att_ws):
+            filename = "%s/%s.ep.{.updater.epoch}.png" % (
+                self.outdir, self.data[idx][0])
+            if self.reverse:
+                dec_len = int(self.data[idx][1]['input'][1]['shape'][0])
+                enc_len = int(self.data[idx][1]['output'][1]['shape'][0])
+            else:
+                dec_len = int(self.data[idx][1]['output'][1]['shape'][0])
+                enc_len = int(self.data[idx][1]['input'][1]['shape'][0])
+            if len(att_w.shape) == 3:
+                att_w = att_w[:, :dec_len, :enc_len]
+            else:
+                att_w = att_w[:dec_len, :enc_len]
+            self._plot_and_save_attention(att_w, filename.format(trainer))
+
+    def _plot_and_save_attention(self, att_w, filename):
+        # dynamically import matplotlib due to not found error
+        import matplotlib.pyplot as plt
+        if len(att_w.shape) == 3:
+            for h, aw in enumerate(att_w, 1):
+                plt.subplot(1, len(att_w), h)
+                plt.imshow(aw, aspect="auto")
+                plt.xlabel("Encoder Index")
+                plt.ylabel("Decoder Index")
+        else:
+            plt.imshow(att_w, aspect="auto")
+            plt.xlabel("Encoder Index")
+            plt.ylabel("Decoder Index")
+        plt.tight_layout()
+        plt.savefig(filename)
+        plt.close()
+
+        
 def converter_kaldi(batch, device=None, use_speaker_embedding=None):
     # batch only has one minibatch utterance, which is specified by batch[0]
     batch = batch[0]
@@ -544,7 +609,8 @@ def train(args):
         data = converter_kaldi([data], device=gpu_id, use_speaker_embedding=args.tts_spk_embed_dim)
         trainer.extend(PlotAttentionReport(asr_loss, data, args.outdir + "/att_ws_asr"), trigger=(1, 'epoch'))
         trainer.extend(PlotAttentionReport(e2e_tts, data, args.outdir + "/att_ws_tts",
-                                           CustomConverter(gpu_id, False), True), trigger=(1, 'epoch'))
+                                           CustomConverter(gpu_id, False, args.tts_use_speaker_embedding, 2),
+                                           True), trigger=(1, 'epoch'))
 
     # Take a snapshot for each specified epoch
     trainer.extend(extensions.snapshot(), trigger=(1, 'epoch'))
