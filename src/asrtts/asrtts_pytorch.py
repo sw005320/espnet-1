@@ -337,7 +337,7 @@ def extract_json(json, mode):
     return all_utt
 
 
-def make_batchset_asrtts(data, batch_size, max_length_in, max_length_out, num_batches=0, factor_audio=1, factor_text=5):
+def make_batchset_asrtts(data, batch_size, max_length_in, max_length_out, num_batches=0, factor_audio=1, factor_text=4):
 
     data_audio_only = extract_json(data, 'a')
     data_text_only = extract_json(data, 't')

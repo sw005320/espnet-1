@@ -296,7 +296,7 @@ class E2E(torch.nn.Module):
         :return:
         '''
         # utt list of frame x dim
-        if data[0][1].has_keys('feat_asr'):
+        if data[0][1].has_key('feat_asr'):
             xs = [d[1]['feat_asr'] for d in data]
         else:
             xs = [d[1]['feat'] for d in data]
@@ -394,7 +394,7 @@ class E2E(torch.nn.Module):
             torch.set_grad_enabled(False)
 
         # utt list of frame x dim
-        if data[0][1].has_keys('feat_asr'):
+        if data[0][1].has_key('feat_asr'):
             xs = [d[1]['feat_asr'] for d in data]
         else:
             xs = [d[1]['feat'] for d in data]
