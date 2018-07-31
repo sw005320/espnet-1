@@ -82,7 +82,7 @@ tts_zoneout=0.1
 # common configurations
 
 # minibatch related
-batchsize=50
+batchsize=64
 batch_sort_key="" # empty or input or output (if empty, shuffled batch will be used)
 maxlen_in=400  # if input length  > maxlen_in, batchsize is automatically reduced
 maxlen_out=150 # if output length > maxlen_out, batchsize is automatically reduced
@@ -109,6 +109,7 @@ recog_model=loss.best # set a model to be used for decoding: 'acc.best' or 'loss
 # someone else has already put it.  You'll want to change this
 # if you're not on the CLSP grid.
 datadir=/export/a15/vpanayotov/data
+datadir=../asr1/data
 
 # base url for downloads.
 data_url=www.openslr.org/resources/12
@@ -296,7 +297,6 @@ if [ ${stage} -le 3 ]; then
 	python local/prune_json.py ${feat_dir}/data_short.json > ${feat_dir}/data_short_p.json
     done
 fi
-exit
 
 # You can skip this and remove --rnnlm option in the recognition (stage 5)
 lmexpdir=exp/train_rnnlm_2layer_bs256
@@ -325,7 +325,7 @@ if [ ${stage} -le 4 ]; then
         --batchsize 256 \
         --dict ${dict}
 fi
-exit
+
 if [ -z ${tag} ]; then
     expdir=exp/${train_set}_${data_type}_${etype}_e${elayers}_subsample${subsample}_unit${eunits}_proj${eprojs}_d${dlayers}_unit${dunits}_${atype}_adim_${adim}_aconvc${aconv_chans}_aconvf${aconv_filts}_mtlalpha${mtlalpha}_${opt}_bs${batchsize}_mli${maxlen_in}_mlo${maxlen_out}
     if ${do_delta}; then
