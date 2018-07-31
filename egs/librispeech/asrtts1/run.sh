@@ -82,7 +82,7 @@ tts_zoneout=0.1
 # common configurations
 
 # minibatch related
-batchsize=50
+batchsize=64
 batch_sort_key="" # empty or input or output (if empty, shuffled batch will be used)
 maxlen_in=400  # if input length  > maxlen_in, batchsize is automatically reduced
 maxlen_out=150 # if output length > maxlen_out, batchsize is automatically reduced
@@ -109,6 +109,7 @@ recog_model=loss.best # set a model to be used for decoding: 'acc.best' or 'loss
 # someone else has already put it.  You'll want to change this
 # if you're not on the CLSP grid.
 datadir=/export/a15/vpanayotov/data
+datadir=../asr1/data
 
 # base url for downloads.
 data_url=www.openslr.org/resources/12
