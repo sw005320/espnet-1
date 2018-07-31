@@ -125,7 +125,7 @@ class CustomEvaluater(extensions.Evaluator):
 
                 asr_loss, asr_acc = self.model.asr_loss(data, do_report=False, report_acc=True)  # disable reporter
                 tts_loss = self.model.tts_loss(tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens,
-                                               do_report=False)
+                                               spembs=spembs, do_report=False)
                 s2s_loss = self.model.ae_speech(data)
                 t2t_loss, t2t_acc = self.model.ae_text(data)
 
@@ -239,7 +239,7 @@ class CustomUpdater(training.StandardUpdater):
                     logging.info("asr_loss_data: %f", asr_loss_data)
                     self.gradient_decent(loss, self.opts[mode])
                 if mode == 'tts':
-                    loss = self.model.tts_loss(tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens, do_report=False)
+                    loss = self.model.tts_loss(tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens, spembs=spembs, do_report=False)
                     tts_loss_data = loss.data[0] if torch_is_old else loss.item()
                     loss_data_sum += tts_loss_data
                     logging.info("tts_loss_data: %f", tts_loss_data)

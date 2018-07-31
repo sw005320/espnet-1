@@ -296,7 +296,10 @@ class E2E(torch.nn.Module):
         :return:
         '''
         # utt list of frame x dim
-        xs = [d[1]['feat'] for d in data]
+        if data[0][1].has_keys('feat_asr'):
+            xs = [d[1]['feat_asr'] for d in data]
+        else:
+            xs = [d[1]['feat'] for d in data]
         # remove 0-output-length utterances
         tids = [d[1]['output'][0]['tokenid'].split() for d in data]
         filtered_index = filter(lambda i: len(tids[i]) > 0, range(len(xs)))
@@ -391,7 +394,10 @@ class E2E(torch.nn.Module):
             torch.set_grad_enabled(False)
 
         # utt list of frame x dim
-        xs = [d[1]['feat'] for d in data]
+        if data[0][1].has_keys('feat_asr'):
+            xs = [d[1]['feat_asr'] for d in data]
+        else:
+            xs = [d[1]['feat'] for d in data]
 
         # remove 0-output-length utterances
         tids = [d[1]['output'][0]['tokenid'].split() for d in data]
