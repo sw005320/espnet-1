@@ -692,11 +692,12 @@ def train(args):
 
     # Resume from a snapshot
     if args.resume:
-        chainer.serializers.load_npz(args.resume, trainer)
+        #chainer.serializers.load_npz(args.resume, trainer)
+        logging.info('loading a model: ' + args.outdir + '/model.acc.best')
         if ngpu > 1:
-            model.module.load_state_dict(torch.load(args.outdir + '/model.acc.best'))
+            model.asr_loss.module.load_state_dict(torch.load(args.outdir + '/model.acc.best'))
         else:
-            model.load_state_dict(torch.load(args.outdir + '/model.acc.best'))
+            model.asr_loss.load_state_dict(torch.load(args.outdir + '/model.acc.best'))
         model = trainer.updater.model
 
     # Evaluate the model with the test dataset for each epoch
