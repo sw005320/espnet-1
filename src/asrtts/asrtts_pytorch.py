@@ -56,10 +56,10 @@ import matplotlib
 matplotlib.use('Agg')
 
 # some tuning params
-REPORT_INTERVAL = 10
+REPORT_INTERVAL = 100
 ALL_MODE = False
 FREEZE_ATT = True
-
+NO_AVG = True
 
 class CustomConverter(object):
     '''CUSTOM CONVERTER FOR TACOTRON2'''
@@ -270,12 +270,21 @@ class CustomEvaluater(extensions.Evaluator):
                 t2t_loss, t2t_acc = self.model.ae_text(data)
 
                 # average loss for all four networks
-                loss = (asr_loss/avg_textlen + tts_loss + s2s_loss + t2t_loss/avg_textlen)/ 4.0
+                if NO_AVG:
+                    loss = (asr_loss + tts_loss + s2s_loss + t2t_loss)/ 4.0
+                else:
+                    loss = (asr_loss/avg_textlen + tts_loss + s2s_loss + t2t_loss/avg_textlen)/ 4.0
                 loss_data = loss.data[0] if torch_is_old else loss.item()
-                asr_loss_data = asr_loss.data[0]/avg_textlen if torch_is_old else asr_loss.item()/avg_textlen
+                if NO_AVG:
+                    asr_loss_data = asr_loss.data[0] if torch_is_old else asr_loss.item()
+                else:
+                    asr_loss_data = asr_loss.data[0]/avg_textlen if torch_is_old else asr_loss.item()/avg_textlen
                 tts_loss_data = tts_loss.data[0] if torch_is_old else tts_loss.item()
                 s2s_loss_data = s2s_loss.data[0] if torch_is_old else s2s_loss.item()
-                t2t_loss_data = t2t_loss.data[0]/avg_textlen if torch_is_old else t2t_loss.item()/avg_textlen
+                if NO_AVG:
+                    t2t_loss_data = t2t_loss.data[0] if torch_is_old else t2t_loss.item()
+                else:
+                    t2t_loss_data = t2t_loss.data[0]/avg_textlen if torch_is_old else t2t_loss.item()/avg_textlen
 
                 chainer.reporter.report({'d/loss': loss_data})
                 chainer.reporter.report({'d/asr_loss': asr_loss_data})
@@ -296,10 +305,11 @@ class CustomEvaluater(extensions.Evaluator):
         return summary.compute_mean()
 
 
-def update_parameters(att, true_or_false):
+def update_parameters(att):
     for child in att.children():
         for param in child.parameters():
-            param.requires_grad = true_or_false
+            if param.grad is not None:
+                param.grad.data.zero_()
 
 
 class CustomUpdater(training.StandardUpdater):
@@ -320,24 +330,31 @@ class CustomUpdater(training.StandardUpdater):
             self.clip_grad_norm = torch.nn.utils.clip_grad_norm_
 
     def gradient_decent(self, loss, optimizer, freeze_att=False):
-        if freeze_att:
-            update_parameters(self.model.tts_loss.model.dec.att, False)
-            update_parameters(self.model.asr_loss.predictor.att, False)
-
         optimizer.zero_grad()  # Clear the parameter gradients
         loss.backward()  # Backprop
         loss.detach()  # Truncate the graph
+
+        if freeze_att:
+            update_parameters(self.model.tts_loss.model.dec.att)
+            update_parameters(self.model.asr_loss.predictor.att)
+
         # compute the gradient norm to check if it is normal or not
         grad_norm = self.clip_grad_norm(self.model.parameters(), self.grad_clip_threshold)
-        logging.info('grad norm={}'.format(grad_norm))
+        logging.info('total grad norm={}'.format(grad_norm))
+        grad_norm = self.clip_grad_norm(self.model.asr_loss.parameters(), self.grad_clip_threshold)
+        logging.info('asr grad norm={}'.format(grad_norm))
+        grad_norm = self.clip_grad_norm(self.model.tts_loss.parameters(), self.grad_clip_threshold)
+        logging.info('tts grad norm={}'.format(grad_norm))
+        grad_norm = self.clip_grad_norm(self.model.ae_speech.asr_enc.parameters(), self.grad_clip_threshold)
+        grad_norm += self.clip_grad_norm(self.model.ae_speech.tts_dec.parameters(), self.grad_clip_threshold)
+        logging.info('s2s grad norm={}'.format(grad_norm))
+        grad_norm = self.clip_grad_norm(self.model.ae_text.tts_enc.parameters(), self.grad_clip_threshold)
+        grad_norm += self.clip_grad_norm(self.model.ae_text.asr_dec.parameters(), self.grad_clip_threshold)
+        logging.info('t2t grad norm={}'.format(grad_norm))
         if math.isnan(grad_norm):
             logging.warning('grad norm is nan. Do not update model.')
         else:
             optimizer.step()
-
-        if freeze_att:
-            update_parameters(self.model.tts_loss.model.dec.att, True)
-            update_parameters(self.model.asr_loss.predictor.att, True)
 
     # The core part of the update routine can be customized by overriding.
     def update_core(self):
@@ -373,7 +390,10 @@ class CustomUpdater(training.StandardUpdater):
             for mode in modes:
                 if mode == 'asr':
                     loss, asr_acc = self.model.asr_loss(data, do_report=False, report_acc=True)  # disable reporter
-                    loss = loss/avg_textlen
+                    if NO_AVG:
+                        pass
+                    else:
+                        loss = loss/avg_textlen
                     asr_loss_data = loss.data[0] if torch_is_old else loss.item()
                     loss_data_sum += asr_loss_data
                     logging.info("asr_loss_data: %f", asr_loss_data)
@@ -392,7 +412,10 @@ class CustomUpdater(training.StandardUpdater):
                     self.gradient_decent(loss, self.opts[mode], freeze_att=FREEZE_ATT)
                 if mode == 't2t':
                     loss, t2t_acc = self.model.ae_text(data)
-                    loss = loss/avg_textlen
+                    if NO_AVG:
+                        pass
+                    else:
+                        loss = loss/avg_textlen
                     t2t_loss_data = loss.data[0] if torch_is_old else loss.item()
                     loss_data_sum += t2t_loss_data
                     logging.info("t2t_loss_data: %f", t2t_loss_data)
@@ -425,7 +448,10 @@ class CustomUpdater(training.StandardUpdater):
         elif data[0][1]['utt2mode'] == 't':
             logging.info("text only mode")
             t2t_loss, t2t_acc = self.model.ae_text(data)
-            loss = t2t_loss / avg_textlen
+            if NO_AVG:
+                loss = t2t_loss
+            else:
+                loss = t2t_loss / avg_textlen
             self.gradient_decent(loss, self.opts['t2t'], freeze_att=FREEZE_ATT)
 
             loss_data = loss.data[0] if torch_is_old else loss.item()
