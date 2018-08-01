@@ -29,8 +29,9 @@ class ASRTTSLoss(torch.nn.Module):
         self.asr_loss = asr_loss
         self.tts_loss = tts_loss
 
-        self.ae_speech = AutoEncoderSpeech(asr_loss, tts_loss, args)
-        self.ae_text = AutoEncoderText(asr_loss, tts_loss, args)
+        self.ae_speech = AutoEncoderSpeech(asr_loss, tts_loss, args, tts_loss.use_masking, tts_loss.bce_pos_weight,
+                                           use_speaker_embedding=self.tts_loss.model.spk_embed_dim)
+        self.ae_text = AutoEncoderText(asr_loss, tts_loss, args, use_speaker_embedding=self.tts_loss.model.spk_embed_dim)
 
         self.return_targets = return_targets
 
@@ -148,35 +149,37 @@ def get_subsample(args):
 
 
 class AutoEncoderSpeech(torch.nn.Module):
-    def __init__(self, asr_loss, tts_loss, args, return_targets=True):
+    def __init__(self, asr_loss, tts_loss, args, use_masking, bce_pos_weight,
+                 return_targets=True, use_speaker_embedding=None):
         super(AutoEncoderSpeech, self).__init__()
-        self.asr_loss = asr_loss
-        self.tts_loss = tts_loss
         self.asr_enc = asr_loss.predictor.enc
         self.tts_dec = tts_loss.model.dec
         self.subsample = get_subsample(args)
+        self.use_masking = use_masking
+        self.bce_pos_weight = bce_pos_weight
         self.return_targets = return_targets
+        self.use_speaker_embedding = use_speaker_embedding
 
     def forward(self, data):
         asr_texts, asr_feats, asr_featlens = get_asr_data(self, data, 'feat')
         tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens, spembs = \
-            get_tts_data(self, data, 'feat', use_speaker_embedding=self.tts_loss.model.spk_embed_dim)
+            get_tts_data(self, data, 'feat', self.use_speaker_embedding)
 
         # encoder
         hpad, hlens = self.asr_enc(asr_feats, asr_featlens)
-        if self.tts_loss.model.spk_embed_dim is not None:
+        if self.use_speaker_embedding is not None:
             spembs = F.normalize(spembs).unsqueeze(1).expand(-1, hpad.size(1), -1)
             hpad = torch.cat([hpad, spembs], dim=-1)
         after_outs, before_outs, logits = self.tts_dec(hpad, hlens, tts_feats)
         # copied from e2e_tts_th.py
-        if self.tts_loss.use_masking and tts_featlens is not None:
+        if self.use_masking and tts_featlens is not None:
             # weight positive samples
-            if self.tts_loss.bce_pos_weight != 1.0:
+            if self.bce_pos_weight != 1.0:
                 # TODO(kan-bayashi): need to be fixed in pytorch v4
                 weights = tts_feats.data.new(*tts_labels.size()).fill_(1)
                 if torch_is_old:
                     weights = Variable(weights, volatile=tts_feats.volatile)
-                weights.masked_fill_(tts_labels.eq(1), self.tts_loss.bce_pos_weight)
+                weights.masked_fill_(tts_labels.eq(1), self.bce_pos_weight)
             else:
                 weights = None
             # masking padded values
@@ -211,19 +214,18 @@ class AutoEncoderSpeech(torch.nn.Module):
 
 
 class AutoEncoderText(torch.nn.Module):
-    def __init__(self, asr_loss, tts_loss, args, return_targets=True):
+    def __init__(self, asr_loss, tts_loss, args, return_targets=True, use_speaker_embedding=None):
         super(AutoEncoderText, self).__init__()
-        self.asr_loss = asr_loss
-        self.tts_loss = tts_loss
         self.tts_enc = tts_loss.model.enc
         self.asr_dec = asr_loss.predictor.dec
         self.subsample = get_subsample(args)
         self.return_targets = return_targets
+        self.use_speaker_embedding = use_speaker_embedding
 
     def forward(self, data):
         asr_texts, asr_feats, asr_featlens = get_asr_data(self, data, 'text')
         tts_texts, tts_textlens, tts_feats, tts_labels, tts_featlens, spembs = \
-            get_tts_data(self, data, 'text', use_speaker_embedding=self.tts_loss.model.spk_embed_dim)
+            get_tts_data(self, data, 'text', self.use_speaker_embedding)
         
         if isinstance(tts_textlens, torch.Tensor) or isinstance(tts_textlens, np.ndarray):
             tts_textlens = list(map(int, tts_textlens))

@@ -658,10 +658,10 @@ def train(args):
     # Setup an optimizer
     dummy_target = chainer.Chain()
     opts = {}
-    opts['asr'] = torch.optim.Adadelta(model.parameters(), rho=0.95, eps=args.eps)
-    opts['tts'] = torch.optim.Adam(model.parameters(), args.lr, eps=args.eps, weight_decay=args.weight_decay)
-    opts['s2s'] = torch.optim.Adam(model.parameters(), args.lr, eps=args.eps, weight_decay=args.weight_decay)
-    opts['t2t'] = torch.optim.Adam(model.parameters(), args.lr, eps=args.eps, weight_decay=args.weight_decay)
+    opts['asr'] = torch.optim.Adadelta(model.asr_loss.parameters(), rho=0.95, eps=args.eps)
+    opts['tts'] = torch.optim.Adam(model.tts_loss.parameters(), args.lr, eps=args.eps, weight_decay=args.weight_decay)
+    opts['s2s'] = torch.optim.Adam(model.ae_speech.parameters(), args.lr*0.01, eps=args.eps, weight_decay=args.weight_decay)
+    opts['t2t'] = torch.optim.Adam(model.ae_text.parameters(), args.lr*0.01, eps=args.eps, weight_decay=args.weight_decay)
     for key in ['asr', 'tts', 's2s', 't2t']:
         # FIXME: TOO DIRTY HACK
         setattr(opts[key], "target", dummy_target)
