@@ -111,6 +111,11 @@ recog_model=loss.best # set a model to be used for decoding: 'acc.best' or 'loss
 datadir=/export/a15/vpanayotov/data
 datadir=../asr1/data
 
+# model
+model_asr=
+model_tts=
+model=
+
 # base url for downloads.
 data_url=www.openslr.org/resources/12
 
@@ -428,7 +433,10 @@ if [ ${stage} -le 5 ]; then
         --maxlen-in ${maxlen_in} \
         --maxlen-out ${maxlen_out} \
         --opt ${opt} \
-        --epochs ${epochs}
+        --epochs ${epochs} \
+        --model-asr ${model_asr} \
+        --model-tts ${model_tts} \
+        --model ${model}
 fi
 
 if [ ${stage} -le 6 ]; then
@@ -460,13 +468,11 @@ if [ ${stage} -le 6 ]; then
             --minlenratio ${minlenratio} \
             --ctc-weight ${ctc_weight} \
             --rnnlm ${lmexpdir}/rnnlm.model.best \
-            --lm-weight ${lm_weight} \
-            &
-        wait
+            --lm-weight ${lm_weight}
 
         score_sclite.sh --wer true ${expdir}/${decode_dir} ${dict}
 
-    ) &
+    )
     done
     wait
     echo "Finished"

@@ -203,6 +203,13 @@ def main():
                         help='Gradient norm threshold to clip')
     parser.add_argument('--num-save-attention', default=3, type=int,
                         help='Number of samples of attention to be saved')
+    # model road
+    parser.add_argument('--model', default='', nargs='?',
+                        help='Read ASR+TTTS model')
+    parser.add_argument('--model-asr', default='', nargs='?',
+                        help='Read ASR model')
+    parser.add_argument('--model-tts', default='', nargs='?',
+                        help='Read TTS model')
     args = parser.parse_args()
 
     # logging info

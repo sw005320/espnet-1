@@ -60,6 +60,7 @@ REPORT_INTERVAL = 100
 ALL_MODE = False
 FREEZE_ATT = True
 NO_AVG = True
+MODEL_FULL = False
 
 class CustomConverter(object):
     '''CUSTOM CONVERTER FOR TACOTRON2'''
@@ -421,6 +422,7 @@ class CustomUpdater(training.StandardUpdater):
                     logging.info("t2t_loss_data: %f", t2t_loss_data)
                     self.gradient_decent(loss, self.opts[mode], freeze_att=FREEZE_ATT)
                 logging.info("loss_data_sum: %f", loss_data_sum)
+
             if ALL_MODE:
                 loss_data = loss_data_sum / 4.0
             else:
@@ -658,7 +660,8 @@ def train(args):
     # Setup an optimizer
     dummy_target = chainer.Chain()
     opts = {}
-    opts['asr'] = torch.optim.Adadelta(model.asr_loss.parameters(), rho=0.95, eps=args.eps)
+    #opts['asr'] = torch.optim.Adadelta(model.asr_loss.parameters(), rho=0.95, eps=args.eps)
+    opts['asr'] = torch.optim.Adam(model.asr_loss.parameters(), args.lr*0.1, eps=args.eps, weight_decay=args.weight_decay)
     opts['tts'] = torch.optim.Adam(model.tts_loss.parameters(), args.lr, eps=args.eps, weight_decay=args.weight_decay)
     opts['s2s'] = torch.optim.Adam(model.ae_speech.parameters(), args.lr*0.01, eps=args.eps, weight_decay=args.weight_decay)
     opts['t2t'] = torch.optim.Adam(model.ae_text.parameters(), args.lr*0.01, eps=args.eps, weight_decay=args.weight_decay)
@@ -697,6 +700,21 @@ def train(args):
             model.module.load_state_dict(torch.load(args.outdir + '/model.acc.best'))
         else:
             model.load_state_dict(torch.load(args.outdir + '/model.acc.best'))
+    if args.model:
+        if ngpu > 1:
+            model.module.load_state_dict(torch.load(args.model))
+        else:
+            model.load_state_dict(torch.load(args.model))
+    elif args.model_asr:
+        if ngpu > 1:
+            model.asr_loss.module.load_state_dict(torch.load(args.model_asr))
+        else:
+            model.asr_loss.load_state_dict(torch.load(args.model_asr))
+    elif args.model_tts:
+        if ngpu > 1:
+            model.tts_loss.module.load_state_dict(torch.load(args.model_tts))
+        else:
+            model.tts_loss.load_state_dict(torch.load(args.model_tts))
         model = trainer.updater.model
 
     # Evaluate the model with the test dataset for each epoch
@@ -767,14 +785,14 @@ def recog(args):
     # read training config
     with open(args.model_conf, "rb") as f:
         logging.info('reading a model config file from' + args.model_conf)
-        idim, odim, train_args = pickle.load(f)
+        idim_asr, odim_asr, train_args = pickle.load(f)
 
     for key in sorted(vars(args).keys()):
         logging.info('ARGS: ' + key + ': ' + str(vars(args)[key]))
 
     # specify model architecture
     logging.info('reading model parameters from' + args.model)
-    e2e_asr = E2E(idim, odim, train_args)
+    e2e_asr = E2E(idim_asr, odim_asr, train_args)
     logging.info(e2e_asr)
     asr_loss = Loss(e2e_asr, train_args.mtlalpha)
 
@@ -789,8 +807,9 @@ def recog(args):
     # specify model architecture for TTS
     # reverse input and output dimension
     e2e_tts = Tacotron2(
-        idim=odim,
-        odim=idim,
+        idim=odim_asr,
+        odim=idim_asr - 3,
+        spk_embed_dim=train_args.tts_spk_embed_dim,
         embed_dim=train_args.tts_embed_dim,
         elayers=train_args.tts_elayers,
         eunits=train_args.tts_eunits,
