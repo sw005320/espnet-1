@@ -25,12 +25,13 @@ import logging
 from typing import Any, Dict, List, Optional, Sequence
 
 from splet import metrics as metric_keys
+from splet.corpus_metrics import bleu
 from splet.utterance_metrics import error_rate
 
 # name -> how to build it and how to call it.
 #   tier:     which loop runs it (utterance, session or corpus)
 #   setup:    factory called with the config entry's keyword arguments
-#   metric:   scorer called per item
+#   metric:   scorer called per item (per utterance, or once for the corpus)
 #   defaults: keyword arguments implied by the name itself
 METRIC_CHOICES: Dict[str, Dict[str, Any]] = {
     "wer": {
@@ -44,6 +45,24 @@ METRIC_CHOICES: Dict[str, Dict[str, Any]] = {
         "setup": error_rate.error_rate_setup,
         "metric": error_rate.error_rate_metric,
         "defaults": {"name": "cer", "tokenizer": "char"},
+    },
+    "bleu": {
+        "tier": "corpus",
+        "setup": bleu.bleu_setup,
+        "metric": bleu.sacrebleu_scoring,
+        "defaults": {},
+    },
+    "chrf": {
+        "tier": "corpus",
+        "setup": bleu.chrf_setup,
+        "metric": bleu.sacrebleu_scoring,
+        "defaults": {},
+    },
+    "ter": {
+        "tier": "corpus",
+        "setup": bleu.ter_setup,
+        "metric": bleu.sacrebleu_scoring,
+        "defaults": {},
     },
 }
 
@@ -113,11 +132,7 @@ def load_corpus_modules(
     score_config: Sequence[Dict[str, Any]],
     normalize: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Dict[str, Dict[str, Any]]:
-    """Build the corpus-tier metrics.
-
-    None exist yet; :mod:`splet.corpus_metrics` documents the contract they
-    will follow.
-    """
+    """Build the corpus-tier metrics (BLEU, chrF, TER)."""
     return load_score_modules(score_config, tier="corpus", normalize=normalize)
 
 
@@ -181,16 +196,38 @@ def session_scoring(*args, **kwargs):
     )
 
 
-def corpus_scoring(*args, **kwargs):
-    """Score the corpus as a whole. No corpus-tier metric exists yet.
+def corpus_scoring(
+    pred_texts: Dict[str, str],
+    score_modules: Dict[str, Dict[str, Any]],
+    gt_texts: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """Score the corpus as a whole with every corpus-tier metric.
+
+    Args:
+        pred_texts: Utterance id to hypothesis text.
+        score_modules: From :func:`load_corpus_modules`.
+        gt_texts: Utterance id to reference text.
+
+    Returns:
+        The corpus-level result keys of every metric, merged.
 
     Raises:
-        NotImplementedError: Always. See :mod:`splet.corpus_metrics` for the
-            contract this loop will follow.
+        KeyError: If a hypothesis has no reference, for the same reason as
+            in :func:`list_scoring`.
     """
-    raise NotImplementedError(
-        "the corpus tier has no metrics yet; see splet/corpus_metrics"
-    )
+    keys = list(pred_texts)
+    gt_list = None
+    if gt_texts is not None:
+        for key in keys:
+            if key not in gt_texts:
+                raise KeyError(f"no reference for hypothesis '{key}'")
+        gt_list = [gt_texts[key] for key in keys]
+    pred_list = [pred_texts[key] for key in keys]
+
+    result: Dict[str, Any] = {}
+    for module in score_modules.values():
+        result.update(module["module"](module["scorer"], pred_list, gt_list))
+    return result
 
 
 def load_summary(score_info: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
