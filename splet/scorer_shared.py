@@ -214,6 +214,11 @@ def corpus_scoring(
     Raises:
         KeyError: If a hypothesis has no reference, for the same reason as
             in :func:`list_scoring`.
+
+    A reference with no hypothesis is only warned about. Unlike WER, where a
+    dropped utterance would at least show up as deletions, it just shrinks
+    the corpus BLEU is computed over, so the score can go up without anyone
+    noticing.
     """
     keys = list(pred_texts)
     gt_list = None
@@ -222,6 +227,15 @@ def corpus_scoring(
             if key not in gt_texts:
                 raise KeyError(f"no reference for hypothesis '{key}'")
         gt_list = [gt_texts[key] for key in keys]
+        missing = [key for key in gt_texts if key not in pred_texts]
+        if missing:
+            logging.warning(
+                "%d of %d references have no hypothesis and are left out of "
+                "the corpus scores (first: %s)",
+                len(missing),
+                len(gt_texts),
+                ", ".join(missing[:5]),
+            )
     pred_list = [pred_texts[key] for key in keys]
 
     result: Dict[str, Any] = {}

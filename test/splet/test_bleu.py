@@ -136,6 +136,25 @@ def test_hypothesis_without_reference_is_an_error():
         corpus_scoring({"utt0": "a", "utt9": "b"}, modules, {"utt0": "a"})
 
 
+def test_reference_without_hypothesis_is_warned_about(caplog):
+    modules = load_corpus_modules([{"name": "bleu"}])
+    gt = {f"utt{i}": text for i, text in enumerate(REFS)}
+    pred = {"utt0": HYPS[0]}
+    with caplog.at_level("WARNING"):
+        corpus_scoring(pred, modules, gt)
+    assert "3 of 4 references have no hypothesis" in caplog.text
+    assert "utt1" in caplog.text
+
+
+def test_matching_keys_give_no_warning(caplog):
+    modules = load_corpus_modules([{"name": "bleu"}])
+    gt = {f"utt{i}": text for i, text in enumerate(REFS)}
+    pred = {f"utt{i}": text for i, text in enumerate(HYPS)}
+    with caplog.at_level("WARNING"):
+        corpus_scoring(pred, modules, gt)
+    assert caplog.text == ""
+
+
 def test_bleu_needs_references():
     with pytest.raises(ValueError, match="references"):
         sacrebleu_scoring(bleu_setup(), ["a"], None)
