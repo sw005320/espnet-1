@@ -1,4 +1,4 @@
-"""Metrics that need the whole corpus at once. No metric lives here yet.
+"""Metrics that need the whole corpus at once.
 
 BLEU is the reason this tier exists: corpus BLEU is not the average of
 sentence BLEUs, so it cannot be computed one utterance at a time and then
@@ -12,9 +12,20 @@ The contract mirrors VERSA's corpus tier::
     def bleu_scoring(scorer, pred_texts, gt_texts) -> dict:
         '''Return a flat dict of corpus-level result keys.'''
 
-For SacreBLEU, chrF and TER the implementation should call sacrebleu rather
-than reimplement it, and record the signature sacrebleu reports -- the
-signature is what makes the number comparable with a published one, and a
-BLEU without it is not reproducible. See the discussion in
-espnet/espnet#6735.
+``pred_texts`` and ``gt_texts`` are lists in the same utterance order;
+:func:`splet.scorer_shared.corpus_scoring` does the matching by key.
+
+BLEU, chrF and TER call sacrebleu rather than reimplement it, and record the
+signature sacrebleu reports -- the signature is what makes the number
+comparable with a published one, and a BLEU without it is not reproducible.
+See :mod:`splet.corpus_metrics.bleu` and the discussion in espnet/espnet#6735.
 """
+
+from splet.corpus_metrics.bleu import (  # noqa: F401
+    bleu_setup,
+    chrf_setup,
+    sacrebleu_scoring,
+    ter_setup,
+)
+
+__all__ = ["bleu_setup", "chrf_setup", "sacrebleu_scoring", "ter_setup"]

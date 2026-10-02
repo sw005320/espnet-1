@@ -28,7 +28,9 @@ import yaml
 
 from splet.scorer_shared import (
     METRIC_CHOICES,
+    corpus_scoring,
     list_scoring,
+    load_corpus_modules,
     load_score_modules,
     load_summary,
 )
@@ -60,7 +62,8 @@ def get_parser() -> argparse.ArgumentParser:
         "--output_file",
         type=str,
         default=None,
-        help="Path to write per-utterance results as JSON lines.",
+        help="Path to write per-utterance results as JSON lines. Corpus-level "
+        "metrics such as BLEU only appear in the printed summary.",
     )
     parser.add_argument(
         "--io",
@@ -130,14 +133,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     logging.info("The number of utterances = %d", len(pred_texts))
 
     score_modules = load_score_modules(score_config, normalize=normalize)
-    if not score_modules:
-        logging.error("no utterance-level scoring function is provided")
+    corpus_modules = load_corpus_modules(score_config, normalize=normalize)
+    if not score_modules and not corpus_modules:
+        logging.error("no scoring function is provided")
         return 2
 
-    score_info = list_scoring(
-        pred_texts, score_modules, gt_texts, output_file=args.output_file
-    )
-    summary = load_summary(score_info)
+    if score_modules:
+        score_info = list_scoring(
+            pred_texts, score_modules, gt_texts, output_file=args.output_file
+        )
+        summary = load_summary(score_info)
+    else:
+        summary = {"num_utterances": len(pred_texts)}
+    if corpus_modules:
+        summary.update(corpus_scoring(pred_texts, corpus_modules, gt_texts))
     logging.info("Summary: %s", summary)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
