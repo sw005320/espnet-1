@@ -268,3 +268,20 @@ def test_main_refuses_an_input_without_a_value(tmp_path, capsys):
         )
     assert e.value.code == 2
     assert "give NAME=VALUE" in capsys.readouterr().err
+
+
+def test_main_names_a_system_that_declares_no_inference(tmp_path, capsys):
+    with pytest.raises(SystemExit) as e:
+        notebook.main(
+            [
+                "org/tts_model",
+                "--system",
+                "no_such_system",
+                "--title",
+                "t",
+                "-o",
+                str(tmp_path / "a.ipynb"),
+            ]
+        )
+    assert e.value.code == 2
+    assert "declares no Inference to write a demo from" in capsys.readouterr().err

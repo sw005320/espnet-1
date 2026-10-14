@@ -272,7 +272,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         system = read_meta(locate_pack(args.tag)).get("system")
         if not system:
             parser.error(f"{args.tag} names no system in its meta.yaml; pass --system")
-    cls = get_inference_class(system)
+    try:
+        cls = get_inference_class(system)
+    except ImportError as exc:
+        # a system with no Inference declaration has no usage to write a page from
+        parser.error(f"{system} declares no Inference to write a demo from: {exc}")
     page = build_demo_notebook(
         cls,
         args.tag,
