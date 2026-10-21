@@ -1,0 +1,64 @@
+# Fails a pull request whose doc/vuepress lockfile `npm ci` cannot install.
+#
+# The only other job that runs `npm ci` there is generate_and_deploy_doc in
+# publish_doc.yml, and on a pull request it runs only with the Documentation
+# label. That label is applied by label_pull_request.yml, which starts at the
+# same moment and usually finishes after publish_doc.yml has already read the
+# labels - on #6940 the label landed three seconds after get_labels ran - so
+# the doc build was skipped and the run was green.
+#
+# Three Dependabot pull requests in a row (#6845, #6937, #6940) changed only
+# package-lock.json, dropped the 50 nested markdown-it@15 copies the @mdit/*
+# packages need, and passed CI with a lockfile `npm ci` rejects:
+#
+#   npm error Missing: markdown-it@15.0.3 from lock file
+#
+# This checks just that: is the lockfile installable against package.json. It
+# does not build the docs. --ignore-scripts skips patch-package and every
+# dependency's install script, so no code from the installed packages runs;
+# the job takes seconds rather than the doc build's quarter of an hour.
+#
+# The runner's preinstalled npm is used on purpose, without setup-node: the
+# lockfile check is the same on npm 9, 10 and 11 (#6940 fails, master passes,
+# on each of 9.2.0, 10.9.7 and 11.6.2), so a pinned version buys nothing here.
+
+name: check doc lockfile
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "doc/vuepress/package.json"
+      - "doc/vuepress/package-lock.json"
+      - ".github/workflows/check_doc_lockfile.yml"
+  pull_request:
+    branches:
+      - master
+    paths:
+      - "doc/vuepress/package.json"
+      - "doc/vuepress/package-lock.json"
+      - ".github/workflows/check_doc_lockfile.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  npm_ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # See ci_on_ubuntu.yml: the default persists GITHUB_TOKEN in .git/config.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: npm ci
+        working-directory: doc/vuepress
+        run: |
+          node --version
+          npm --version
+          npm ci --ignore-scripts --no-audit --no-fund
