@@ -186,8 +186,10 @@ def token_word_spans(timings, utt_begin_indices, index_duration: float):
 
 
 def _segments(task):
-    """Run in a worker: the segments of one task (get_segments + task.set),
-    and the word spans from the frames of the tokens (token_word_spans)."""
+    """Run in a worker: the segments and token word spans of one task.
+
+    get_segments + task.set, then token_word_spans.
+    """
     from espnet2.bin.s2t_align import CTCSegmentation
 
     t0 = time.perf_counter()

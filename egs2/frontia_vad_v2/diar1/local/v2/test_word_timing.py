@@ -16,8 +16,10 @@ FRAME = 0.08
 
 
 def _align(spikes, words, frames=40):
-    """CTC segmentation of synthetic posteriors: blank everywhere except one
-    spike frame per token; spikes = [(frame, token id)]."""
+    """CTC segmentation of synthetic posteriors.
+
+    Blank everywhere except one spike frame per token; spikes = [(frame, token id)].
+    """
     config = cs.CtcSegmentationParameters(char_list=["<blank>", "a", "b", "c", "d"])
     config.index_duration = FRAME
     config.blank = 0
@@ -46,8 +48,11 @@ def test_token_spans_cover_the_frames_of_each_word():
 
 
 def test_segmentation_starts_words_early_and_closes_pauses():
-    """The segments of determine_utterance_segments start up to 0.5 s before the
-    first token: the reason v2's stage 4 had word labels starting early."""
+    """Segments start up to 0.5 s before the first token.
+
+    determine_utterance_segments places them so; this made the word labels of
+    v2's stage 4 start early.
+    """
     spikes = [(5, 1), (7, 2), (20, 3), (30, 4), (32, 1)]
     timings, ubi, segments, config = _align(spikes, [[1, 2], [3], [4, 1]])
     spans = token_word_spans(timings, ubi, config.index_duration_in_seconds)
