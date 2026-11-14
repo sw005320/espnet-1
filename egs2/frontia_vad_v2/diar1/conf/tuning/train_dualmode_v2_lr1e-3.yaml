@@ -71,7 +71,7 @@ chunk_upsampling_factor: 0.3
 chunk_left_context: 16000
 batch_size: 256      # per mini-batch, all GPUs: 64 windows per GPU on 4 GPUs
 accum_grad: 4        # 1024 windows per update
-num_workers: 16      # per GPU process
+num_workers: 15      # per GPU process (16 cores of a GPU share on an rt_HF node; 24 was slower)
 seed: 1
 optim: adam
 optim_conf:
@@ -80,7 +80,7 @@ scheduler: warmuplr
 scheduler_conf:
     warmup_steps: 625    # updates: the 640k windows of v1's 10000 steps x 64
 grad_clip: 5
-max_epoch: 30
+max_epoch: 60         # still improving at 30 (valid loss and acc); resumed at epoch 31
 patience: 5
 
 best_model_criterion:
