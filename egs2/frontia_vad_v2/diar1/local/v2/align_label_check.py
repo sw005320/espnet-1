@@ -163,6 +163,123 @@ def bench_longest(a, aligner, audio, scp, model_words, align_batched):
     )
 
 
+MFA_SILENCE = {"", "sil", "sp", "spn", "<eps>"}
+
+
+def textgrid_words(text: str):
+    """[(start, end)] of the non-silent intervals of a TextGrid's "words" tier.
+
+    Praat TextGrid long text format, as the Montreal Forced Aligner writes it.
+    """
+    tiers = re.split(r"\n\s*item \[\d+\]:", text)
+    for tier in tiers[1:]:
+        name = re.search(r'name = "([^"]*)"', tier)
+        if not name or name[1] != "words":
+            continue
+        out = []
+        for xmin, xmax, word in re.findall(
+            r'xmin = ([0-9.]+)\s*xmax = ([0-9.]+)\s*text = "([^"]*)"', tier
+        ):
+            if word.strip().lower() not in MFA_SILENCE:
+                out.append((float(xmin), float(xmax)))
+        return out
+    raise ValueError("no words tier")
+
+
+def read_mfa_words(archive: Path):
+    """{utterance id: [(start, end)]} of MFA word alignments in a zip.
+
+    The zip holds TextGrids <...>/<utterance id>.TextGrid.
+    """
+    z = zipfile.ZipFile(archive)
+    out = {}
+    for n in z.namelist():
+        if n.endswith(".TextGrid") and ("dev-clean" in n or "dev-other" in n):
+            uid = n.rsplit("/", 1)[-1][: -len(".TextGrid")]
+            out[uid] = textgrid_words(z.read(n).decode("utf-8", "replace"))
+    if not out:
+        raise RuntimeError(f"no dev TextGrid in {archive}")
+    return out
+
+
+def librispeech_utterances(root: Path, subsets):
+    """(subset, utterance id, flac path, words) of LibriSpeech subsets."""
+    for sub in subsets:
+        for trans in sorted((root / sub).glob("*/*/*.trans.txt")):
+            for line in trans.read_text().splitlines():
+                uid, text = line.split(" ", 1)
+                yield sub, uid, trans.parent / f"{uid}.flac", text.split()
+
+
+def mfa_rttm(words_by_utt, durs, bridge: float):
+    """RTTM lines of the MFA words.
+
+    Each word from its start to its end, gaps shorter than `bridge` s joined
+    (the convention of the test RTTMs).
+    """
+    lines = []
+    for uid, words in sorted(words_by_utt.items()):
+        for s, e in merge(words, bridge):
+            lines.append(f"SPEAKER {uid} 1 {s:.3f} {e - s:.3f} <NA> <NA> {uid} <NA>\n")
+    return lines
+
+
+def mfa_pause_report(words_by_utt, bridge: float):
+    """Pauses inside the utterances of the MFA reference (after bridging)."""
+    pauses, n_utt = [], 0
+    has = collections.Counter()
+    for words in words_by_utt.values():
+        segs = merge(words, bridge)
+        g = gaps(segs)
+        pauses += g
+        n_utt += 1
+        for t in (0.2, 0.5, 1.0):
+            has[t] += any(x >= t for x in g)
+    g = np.array(pauses)
+    q = (
+        " / ".join(f"{np.percentile(g, p):.2f}" for p in (10, 50, 90))
+        if len(g)
+        else "-"
+    )
+    return (
+        f"MFA reference: {n_utt} utterances, {len(g)} pauses inside them "
+        f"(p10/50/90 {q} s, {g.sum() / 3600:.2f} h); utterances with a pause "
+        + ", ".join(
+            f">={t:g} s {100 * has[t] / max(1, n_utt):.1f} %" for t in (0.2, 0.5, 1.0)
+        )
+    )
+
+
+def librispeech_items(a, model_words, out: Path):
+    """Alignment items and MFA reference words of LibriSpeech utterances.
+
+    One clip per recording, no packing; writes mfa.rttm.
+    """
+    import soundfile
+
+    mfa = read_mfa_words(Path(a.annotations))
+    items, meta, xml_rows, durs = [], {}, [], []
+    words_by_utt, missing = {}, 0
+    for sub, uid, path, words in librispeech_utterances(Path(a.dump), a.subsets):
+        if uid not in mfa:
+            missing += 1
+            continue
+        durs.append(f"{uid}\t{soundfile.info(str(path)).duration:.3f}\n")
+        meta[uid] = (uid, 0.0, words)
+        words_by_utt[uid] = mfa[uid]
+        xml_rows += [f"{uid}\t{uid}\t{s:.3f}\t{e:.3f}\n" for s, e in mfa[uid]]
+
+        def read(p=path):
+            x, rate = soundfile.read(str(p), dtype="float32")
+            return rate, x
+
+        items.append((uid, model_words(words), "<eng>", read))
+    (out / "mfa.rttm").write_text("".join(mfa_rttm(words_by_utt, None, a.bridge)))
+    print(f"utterances without MFA words (left out): {missing}")
+    print(mfa_pause_report(words_by_utt, a.bridge), flush=True)
+    return items, meta, xml_rows, durs
+
+
 def cmd_align(a):
     sys.path.insert(0, str(Path(a.v2).resolve()))
     import torch
@@ -174,13 +291,14 @@ def cmd_align(a):
 
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    scp = {}
-    for line in open(Path(a.dump) / "wav.scp"):
-        rid = line.split(maxsplit=1)[0]
-        if rid.endswith("_" + a.channel):
-            scp[rid] = line
-    (out / "wav.scp").write_text("".join(scp[r] for r in sorted(scp)))
-    audio = OmniIOAudioScpReader(out / "wav.scp")
+    scp, audio = {}, None
+    if a.set != "librispeech":
+        for line in open(Path(a.dump) / "wav.scp"):
+            rid = line.split(maxsplit=1)[0]
+            if rid.endswith("_" + a.channel):
+                scp[rid] = line
+        (out / "wav.scp").write_text("".join(scp[r] for r in sorted(scp)))
+        audio = OmniIOAudioScpReader(out / "wav.scp")
     root, config, model = model_files(a.model_tag, a.revision)
     torch.manual_seed(0)
     config = absolute_config(root, config, out / "owsm_config.yaml", a.use_sdpa)
@@ -208,6 +326,8 @@ def cmd_align(a):
 
         return read
 
+    if a.set == "librispeech":
+        items, meta, xml_rows, durs = librispeech_items(a, model_words, out)
     for rid in sorted(scp):
         meeting = rid.split("_")[1]
         rate, x = audio[rid]
@@ -221,7 +341,7 @@ def cmd_align(a):
                 for s, e in timed:
                     xml_rows.append(f"{rid}\t{uid}\t{s:.3f}\t{e:.3f}\n")
                 items.append((uid, model_words(toks), "<eng>", reader(rid, ws, we)))
-    print(f"{len(scp)} recordings, {len(items)} utterances", flush=True)
+    print(f"{len(scp) or len(durs)} recordings, {len(items)} utterances", flush=True)
     results = align_batched(
         aligner, iter(items), a.batch_seconds, a.workers, 64, forced_align=True
     )
@@ -633,6 +753,19 @@ def cmd_score(a):
             + (f"; STILL AT THE EDGE for {', '.join(on_edge)}" if on_edge else "")
         )
         print(f"  {name}: pauses at the best setting: {pause_stats(hyp)}")
+        if a.curve_pads:
+            cs, ce = a.curve_pads
+            cells = []
+            for mp in a.min_pauses:
+                ev = scorer(labels(rows, mp, cs, ce))
+                cells.append(
+                    f"{mp:g} s: {ev['deter']:.2f} ({ev['miss']:.2f}/{ev['fa']:.2f})"
+                )
+            print(
+                f"  {name}: min_pause curve at {cs * 1000:.0f}/{ce * 1000:.0f} ms, "
+                "DetER "
+                "(miss/FA): " + "; ".join(cells)
+            )
         print(
             f"  {name}: next best: "
             + "; ".join(
@@ -647,9 +780,20 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     al = sub.add_parser("align")
-    al.add_argument("--set", choices=("ami", "icsi"), required=True)
-    al.add_argument("--channel", required=True)
-    al.add_argument("--dump", required=True)
+    al.add_argument("--set", choices=("ami", "icsi", "librispeech"), required=True)
+    al.add_argument("--channel", default="", help="ami/icsi: the channel")
+    al.add_argument(
+        "--dump",
+        required=True,
+        help="ami/icsi: the test set dump; librispeech: the LibriSpeech directory",
+    )
+    al.add_argument("--subsets", nargs="+", default=["dev-clean", "dev-other"])
+    al.add_argument(
+        "--bridge",
+        type=float,
+        default=0.2,
+        help="librispeech: MFA word gaps shorter than this are speech in mfa.rttm",
+    )
     al.add_argument("--annotations", required=True)
     al.add_argument("--out", required=True)
     al.add_argument(
@@ -685,6 +829,13 @@ def main():
     )
     sc.add_argument(
         "--thresholds", type=float, nargs="+", default=[-2, -5, -10, -15, -20, -30]
+    )
+    sc.add_argument(
+        "--curve_pads",
+        type=float,
+        nargs=2,
+        metavar=("START", "END"),
+        help="also print DetER over --min_pauses at these start and end pads",
     )
     pa = sub.add_parser("pauses")
     pa.add_argument("--out", required=True)
