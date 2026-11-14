@@ -11,8 +11,13 @@ union of the word spans, with pauses shorter than --min_pause bridged. A
 word spans either the segment that CTC segmentation gives it
 (--word_timing segmentation: up to 0.5 s before its first token, to its last
 token; consecutive words nearly abut) or the frames of its own tokens
-(--word_timing tokens, ctc_batch.token_word_spans), widened by --word_pad on
-each side. A
+(--word_timing tokens, ctc_batch.token_word_spans), or the token spans of
+torchaudio's CTC forced alignment of the posteriors (--word_timing
+forced_align, ctc_batch.forced_align_word_spans), widened by --word_pad on
+each side. The word score that --min_word_score tests is CTC segmentation's
+confidence (the lowest mean log posterior over windows of the segment, blank
+frames included) for segmentation and tokens, and the mean log posterior of
+the word's token frames for forced_align. A
 transcript written all in capitals is lower-cased for the model (its BPE is
 case-sensitive). A recording is dropped (and listed in align_dropped.tsv) if
 its language token
@@ -136,9 +141,10 @@ def main():
     parser.add_argument(
         "--word_timing",
         default="segmentation",
-        choices=("segmentation", "tokens"),
-        help="word spans from CTC segmentation's segments, or from the frames of "
-        "each word's tokens (ctc_batch.token_word_spans)",
+        choices=("segmentation", "tokens", "forced_align"),
+        help="word spans from CTC segmentation's segments, from the frames of "
+        "each word's tokens on its path (ctc_batch.token_word_spans), or from "
+        "torchaudio's CTC forced alignment (ctc_batch.forced_align_word_spans)",
     )
     parser.add_argument(
         "--word_pad",
@@ -230,8 +236,14 @@ def main():
             dropped.append((rid, f"language {lang[rid]} not in the model"))
         else:
             todo.append(rid)
-    from ctc_batch import token_word_spans
+    from ctc_batch import (
+        TooFewFrames,
+        forced_align_word_spans,
+        token_word_spans,
+        word_token_ids,
+    )
 
+    use_fa = args.word_timing == "forced_align"
     if args.batch_seconds > 0:
         from ctc_batch import align_batched
 
@@ -245,7 +257,12 @@ def main():
             for rid in todo
         )
         results = align_batched(
-            aligner, items, args.batch_seconds, args.workers, args.prefetch
+            aligner,
+            items,
+            args.batch_seconds,
+            args.workers,
+            args.prefetch,
+            forced_align=use_fa,
         )
     else:
         results = {}
@@ -257,31 +274,50 @@ def main():
             try:
                 task = aligner(np.asarray(x, dtype=np.float32), words, fs=rate)
                 segments = [tuple(map(float, s)) for s in task.segments]
-                tokens = token_word_spans(
-                    task.timings,
-                    task.utt_begin_indices,
-                    task.config.index_duration_in_seconds,
-                )
-                results[rid] = (segments, tokens, None)
+                spans = {
+                    "tokens": token_word_spans(
+                        task.timings,
+                        task.utt_begin_indices,
+                        task.config.index_duration_in_seconds,
+                    )
+                }
+                if use_fa:
+                    try:
+                        spans["forced_align"] = forced_align_word_spans(
+                            torch.from_numpy(task.lpz).to(args.device),
+                            word_token_ids(task),
+                            task.config.blank,
+                            task.config.index_duration_in_seconds,
+                        )
+                    except TooFewFrames as e:
+                        spans["forced_align"] = f"TooFewFrames: {e}"
+                results[rid] = (segments, spans, None)
             except Exception as e:  # noqa: BLE001 - e.g. transcript longer than audio
                 results[rid] = (None, None, f"{type(e).__name__}: {e}")
             if i % 1000 == 0:
                 logging.info("%d / %d aligned", i, len(todo))
     t_write = time.perf_counter()
+    too_few = 0
     for rid in todo:
-        segments, tokens, error = results[rid]
+        segments, spans, error = results[rid]
+        if error is None and use_fa and isinstance(spans["forced_align"], str):
+            error = spans["forced_align"]
+            too_few += 1
         if error is not None:
             dropped.append((rid, f"alignment failed: {error}"))
             continue
         words = text[rid].split()
         pad = args.word_pad
-        timed = segments if args.word_timing == "segmentation" else tokens
-        spans = [
-            (max(0.0, t[0] - pad), t[1] + pad, c)
-            for t, (_, _, c) in zip(timed, segments)
-        ]
-        worst = min(c for _, _, c in spans)
-        for w, (s, e, c), g, k in zip(words, spans, segments, tokens):
+        tokens = spans["tokens"]
+        if args.word_timing == "segmentation":
+            timed = segments  # (start, end, CTC segmentation confidence)
+        elif args.word_timing == "tokens":
+            timed = [(s, e, c) for (s, e), (_, _, c) in zip(tokens, segments)]
+        else:  # (start, end, mean log posterior of the word's token frames)
+            timed = spans["forced_align"]
+        spans_ = [(max(0.0, s - pad), e + pad, c) for s, e, c in timed]
+        worst = min(c for _, _, c in spans_)
+        for w, (s, e, c), g, k in zip(words, spans_, segments, tokens):
             word_rows.append(
                 f"{rid}\t{w}\t{s:.3f}\t{e:.3f}\t{c:.4f}\t{g[0]:.3f}\t{g[1]:.3f}"
                 f"\t{k[0]:.3f}\t{k[1]:.3f}\n"
@@ -289,6 +325,7 @@ def main():
         if worst < args.min_word_score:
             dropped.append((rid, f"word score {worst:.2f} < {args.min_word_score}"))
             continue
+        spans = spans_
         speech[rid] = speech_of_words([(s, e) for s, e, _ in spans], args.min_pause)
 
     kept = sorted(speech)
@@ -343,6 +380,7 @@ def main():
         min_pause=args.min_pause,
         min_word_score=args.min_word_score,
         word_timing=args.word_timing,
+        forced_align_too_few_frames=too_few if use_fa else None,
         word_pad=args.word_pad,
         dtype=args.dtype,
         use_sdpa=args.use_sdpa,
@@ -356,6 +394,8 @@ def main():
     (d / ".aligned").write_text("")
     logging.info("writing the outputs: %.0f s", time.perf_counter() - t_write)
     logging.info("aligned %d, dropped %d: %s", len(kept), len(dropped), d)
+    if use_fa:
+        logging.info("too few frames for forced alignment: %d recordings", too_few)
 
 
 if __name__ == "__main__":

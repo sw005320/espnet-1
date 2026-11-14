@@ -66,3 +66,54 @@ def test_segmentation_starts_words_early_and_closes_pauses():
 def test_a_word_without_tokens_is_an_error():
     with pytest.raises(ValueError):
         token_word_spans(np.zeros(4), [1, 2], FRAME)
+
+
+def _emission(frames, segments, vocab=5):
+    """Log posteriors: blank everywhere except token k on frames [s, e)."""
+    import torch
+
+    lpz = torch.full((frames, vocab), -20.0)
+    lpz[:, 0] = -0.01
+    for s, e, k in segments:
+        lpz[s:e, :] = -20.0
+        lpz[s:e, k] = -0.01
+    return torch.log_softmax(lpz, dim=-1)
+
+
+def test_forced_align_word_spans_cover_the_token_frames():
+    pytest.importorskip("torchaudio")
+    from ctc_batch import forced_align_word_spans
+
+    # word 0 = a (frames 3-5) b (6-7); word 1 = c (15-18); word 2 = d (25) a (27-28)
+    lpz = _emission(40, [(3, 6, 1), (6, 8, 2), (15, 19, 3), (25, 26, 4), (27, 29, 1)])
+    spans = forced_align_word_spans(lpz, [[1, 2], [3], [4, 1]], 0, FRAME)
+    expected = [(3, 8), (15, 19), (25, 29)]
+    for (s, e, score), (fs, fe) in zip(spans, expected):
+        assert s == pytest.approx(fs * FRAME)
+        assert e == pytest.approx(fe * FRAME)
+        assert -0.1 < score <= 0.0  # mean log posterior of the token frames
+
+
+def test_forced_align_needs_frames_for_tokens_and_repeats():
+    pytest.importorskip("torchaudio")
+    from ctc_batch import TooFewFrames, forced_align_word_spans
+
+    lpz = _emission(3, [(0, 1, 1), (2, 3, 1)])
+    # a a needs 2 tokens + 1 repeat = 3 frames: fits
+    forced_align_word_spans(lpz, [[1, 1]], 0, FRAME)
+    with pytest.raises(TooFewFrames):
+        forced_align_word_spans(lpz, [[1, 1], [2]], 0, FRAME)
+
+
+def test_word_token_ids_skip_separators():
+    from types import SimpleNamespace
+
+    from ctc_batch import word_token_ids
+
+    gt = np.array([[-1], [0], [1], [1], [2], [0], [2], [0]])
+    task = SimpleNamespace(
+        ground_truth_mat=gt,
+        utt_begin_indices=[1, 5, 7],
+        config=SimpleNamespace(blank=0),
+    )
+    assert word_token_ids(task) == [[1, 1, 2], [2]]

@@ -61,8 +61,9 @@ align_batch_seconds=3840    # audio per GPU forward (0: one recording at a time)
 align_dtype=float32         # encoder precision of the alignment
 align_use_sdpa=true         # encoder attention through scaled_dot_product_attention (same alignments, 32 % less memory)
 align_tf32=false            # TF32 matrix multiplication in the alignment
-align_word_timing=segmentation  # word spans: CTC segmentation's segments, or "tokens" (the
-                                # frames of each word's tokens; see local/v2/align.py)
+align_word_timing=segmentation  # word spans: CTC segmentation's segments, "tokens" (the
+                                # frames of each word's tokens) or "forced_align" (torchaudio
+                                # CTC forced alignment); see local/v2/align.py
 align_word_pad=0.0          # seconds added on each side of every word span
 align_tasks=1               # stage 4 tasks (${cuda_cmd} --gpu 1 JOB=1:N), one GPU each
 align_shards=""             # stage 4 for these shard numbers only, e.g. "0 1"; empty: all

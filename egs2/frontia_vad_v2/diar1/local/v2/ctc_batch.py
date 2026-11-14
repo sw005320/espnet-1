@@ -185,6 +185,66 @@ def token_word_spans(timings, utt_begin_indices, index_duration: float):
     return spans
 
 
+class TooFewFrames(ValueError):
+    """The emission has fewer frames than the targets need (CTC forced alignment)."""
+
+
+def word_token_ids(task) -> List[List[int]]:
+    """The token ids of each word of a segmentation task, in the model's vocabulary.
+
+    The ground truth holds the tokens of word ``i`` between its separators
+    ``utt_begin_indices[i]`` and ``utt_begin_indices[i + 1]`` (column 0).
+    """
+    gt, ubi, blank = task.ground_truth_mat, task.utt_begin_indices, task.config.blank
+    return [
+        [
+            int(gt[c, 0])
+            for c in range(ubi[i] + 1, ubi[i + 1])
+            if gt[c, 0] not in (-1, blank)
+        ]
+        for i in range(len(ubi) - 1)
+    ]
+
+
+def forced_align_word_spans(lpz, words: List[List[int]], blank: int, index_duration):
+    """(start, end, score) of each word by CTC forced alignment (torchaudio).
+
+    lpz: (frames, vocabulary) log posteriors; words: the token ids of each
+    word. torchaudio.functional.forced_align gives the best path of the whole
+    token sequence, merge_tokens its token spans; a word spans from the first
+    frame of its first token to the end of the last frame of its last token,
+    in seconds (frame times are index_duration apart, as in CTC segmentation).
+    Its score is the mean log posterior of its token frames. Raises
+    TooFewFrames when the frames cannot hold the tokens (forced_align needs
+    frames >= tokens + consecutive repeats).
+    """
+    import torch
+    import torchaudio.functional as taf
+
+    flat = [t for w in words for t in w]
+    if any(not w for w in words):
+        raise ValueError("a word has no token")
+    repeats = sum(a == b for a, b in zip(flat, flat[1:]))
+    if lpz.size(0) < len(flat) + repeats:
+        raise TooFewFrames(
+            f"{lpz.size(0)} frames < {len(flat)} tokens + {repeats} repeats"
+        )
+    targets = torch.tensor([flat], dtype=torch.int32, device=lpz.device)
+    paths, scores = taf.forced_align(lpz[None].float(), targets, blank=blank)
+    token_spans = taf.merge_tokens(paths[0], scores[0], blank=blank)
+    assert len(token_spans) == len(flat), (len(token_spans), len(flat))
+    out, k = [], 0
+    for w in words:
+        spans = token_spans[k : k + len(w)]
+        k += len(w)
+        frames = sum(sp.end - sp.start for sp in spans)
+        score = sum(sp.score * (sp.end - sp.start) for sp in spans) / frames
+        out.append(
+            (spans[0].start * index_duration, spans[-1].end * index_duration, score)
+        )
+    return out
+
+
 def _segments(task):
     """Run in a worker: the segments and token word spans of one task.
 
@@ -211,11 +271,14 @@ def align_batched(
     batch_seconds: float,
     workers: int,
     prefetch: int = 64,
-) -> Dict[str, Tuple[list, list, str]]:
-    """{rec_id: (segments, token spans, error)} of (rec_id, words, lang_sym, read).
+    forced_align: bool = False,
+) -> Dict[str, Tuple[list, dict, str]]:
+    """{rec_id: (segments, spans, error)} of (rec_id, words, lang_sym, read).
 
-    segments and token spans are None when error is not None; see
-    token_word_spans for the token spans.
+    spans maps "tokens" to the word spans of token_word_spans and, with
+    forced_align, "forced_align" to those of forced_align_word_spans (or to
+    an error string when that recording cannot be force-aligned). segments
+    and spans are None when error is not None.
 
     `read` returns (rate, samples) of the recording; it runs in a reader
     thread, `prefetch` recordings ahead. Buffers are encoded `batch_seconds`
@@ -229,7 +292,8 @@ def align_batched(
     geometry = BufferGeometry(aligner)
     per_batch = max(1, int(batch_seconds // geometry.buffer_secs))
     task_sym = aligner.token_list.index(aligner.task_sym)
-    results: Dict[str, Tuple[list, list, str]] = {}
+    results: Dict[str, Tuple[list, dict, str]] = {}
+    fa_spans: Dict[str, object] = {}  # forced alignment of each recording
     inq: "queue.Queue" = queue.Queue(maxsize=prefetch)
     postq: "queue.Queue" = queue.Queue(maxsize=2)  # encoded batches
     futures = []
@@ -262,6 +326,18 @@ def align_batched(
                         words, placeholder, name=rid, speech_len=covered
                     )
                     spent["prepare"] += time.perf_counter() - t0
+                    if forced_align:
+                        t1 = time.perf_counter()
+                        try:
+                            fa_spans[rid] = forced_align_word_spans(
+                                lpz,
+                                word_token_ids(task),
+                                task.config.blank,
+                                task.config.index_duration_in_seconds,
+                            )
+                        except TooFewFrames as e:
+                            fa_spans[rid] = f"TooFewFrames: {e}"
+                        spent["forced_align"] += time.perf_counter() - t1
                     task = reduce_task(task, lpz, spent)
                     futures.append(pool.submit(_segments, task))
                 except Exception as e:  # noqa: BLE001 - e.g. no token of the transcript
@@ -328,7 +404,12 @@ def align_batched(
         t0 = time.perf_counter()
         for f in futures:
             rid, segments, tokens, error, dp = f.result()
-            results[rid] = (segments, tokens, error)
+            spans = None
+            if error is None:
+                spans = {"tokens": tokens}
+                if forced_align:
+                    spans["forced_align"] = fa_spans.get(rid, "not aligned")
+            results[rid] = (segments, spans, error)
             spent["dp_in_workers"] += dp
         spent["dp_wait"] += time.perf_counter() - t0
     wall = time.perf_counter() - wall0
