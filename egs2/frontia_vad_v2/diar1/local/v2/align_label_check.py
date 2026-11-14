@@ -168,6 +168,7 @@ def cmd_align(a):
     import torch
     from align import absolute_config, model_files, model_words
     from ctc_batch import align_batched
+
     from espnet2.bin.s2t_align import CTCSegmentation
     from espnet2.fileio.omniio_audio import OmniIOAudioScpReader
 
