@@ -162,17 +162,45 @@ def reduce_task(task, lpz: torch.Tensor, spent: Dict[str, float] = None):
     return task
 
 
+def token_word_spans(timings, utt_begin_indices, index_duration: float):
+    """(start, end) in seconds of each word, from the frames of its own tokens.
+
+    ``timings[c]`` is the time of the frame at which the CTC segmentation path
+    enters ground-truth position ``c``; the tokens of word ``i`` are the
+    positions between its separators ``utt_begin_indices[i]`` and
+    ``utt_begin_indices[i + 1]``. A word spans from the frame of its first
+    token to the end of the frame of its last token.
+
+    ctc_segmentation.determine_utterance_segments places the boundaries of a
+    segment between the separators instead: a start up to 0.5 s before the
+    first token and an end at the last token, which shifts single words early
+    and closes the pauses between them.
+    """
+    spans = []
+    for i in range(len(utt_begin_indices) - 1):
+        first, last = utt_begin_indices[i] + 1, utt_begin_indices[i + 1] - 1
+        if last < first:
+            raise ValueError(f"word {i} has no token")
+        spans.append((float(timings[first]), float(timings[last]) + index_duration))
+    return spans
+
+
 def _segments(task):
-    """Run in a worker: the segments of one task (get_segments + task.set)."""
+    """Run in a worker: the segments of one task (get_segments + task.set),
+    and the word spans from the frames of the tokens (token_word_spans)."""
     from espnet2.bin.s2t_align import CTCSegmentation
 
     t0 = time.perf_counter()
     try:
         task.set(**CTCSegmentation.get_segments(task))
         segments = [tuple(map(float, s)) for s in task.segments]
-        return task.name, segments, None, time.perf_counter() - t0
+        tokens = token_word_spans(
+            task.timings, task.utt_begin_indices, task.config.index_duration_in_seconds
+        )
+        return task.name, segments, tokens, None, time.perf_counter() - t0
     except Exception as e:  # noqa: BLE001 - reported per recording, as one by one
-        return task.name, None, f"{type(e).__name__}: {e}", time.perf_counter() - t0
+        error = f"{type(e).__name__}: {e}"
+        return task.name, None, None, error, time.perf_counter() - t0
 
 
 def align_batched(
@@ -181,8 +209,11 @@ def align_batched(
     batch_seconds: float,
     workers: int,
     prefetch: int = 64,
-) -> Dict[str, Tuple[list, str]]:
-    """{rec_id: (segments or None, error or None)} of (rec_id, words, lang_sym, read).
+) -> Dict[str, Tuple[list, list, str]]:
+    """{rec_id: (segments, token spans, error)} of (rec_id, words, lang_sym, read).
+
+    segments and token spans are None when error is not None; see
+    token_word_spans for the token spans.
 
     `read` returns (rate, samples) of the recording; it runs in a reader
     thread, `prefetch` recordings ahead. Buffers are encoded `batch_seconds`
@@ -196,7 +227,7 @@ def align_batched(
     geometry = BufferGeometry(aligner)
     per_batch = max(1, int(batch_seconds // geometry.buffer_secs))
     task_sym = aligner.token_list.index(aligner.task_sym)
-    results: Dict[str, Tuple[list, str]] = {}
+    results: Dict[str, Tuple[list, list, str]] = {}
     inq: "queue.Queue" = queue.Queue(maxsize=prefetch)
     postq: "queue.Queue" = queue.Queue(maxsize=2)  # encoded batches
     futures = []
@@ -232,7 +263,7 @@ def align_batched(
                     task = reduce_task(task, lpz, spent)
                     futures.append(pool.submit(_segments, task))
                 except Exception as e:  # noqa: BLE001 - e.g. no token of the transcript
-                    results[rid] = (None, f"{type(e).__name__}: {e}")
+                    results[rid] = (None, None, f"{type(e).__name__}: {e}")
 
     def flush(pending):
         if not pending:
@@ -276,11 +307,11 @@ def align_batched(
                 break
             rid, words, lang_sym, audio, error = item
             if error is not None:
-                results[rid] = (None, error)
+                results[rid] = (None, None, error)
                 continue
             rate, x = audio
             if rate != aligner.fs:
-                results[rid] = (None, f"rate {rate} is not {aligner.fs}")
+                results[rid] = (None, None, f"rate {rate} is not {aligner.fs}")
                 continue
             bufs, covered = geometry.buffers(np.asarray(x, dtype=np.float32))
             lang_id = aligner.token_list.index(lang_sym)
@@ -294,8 +325,8 @@ def align_batched(
         poster.join()
         t0 = time.perf_counter()
         for f in futures:
-            rid, segments, error, dp = f.result()
-            results[rid] = (segments, error)
+            rid, segments, tokens, error, dp = f.result()
+            results[rid] = (segments, tokens, error)
             spent["dp_in_workers"] += dp
         spent["dp_wait"] += time.perf_counter() - t0
     wall = time.perf_counter() - wall0

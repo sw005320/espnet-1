@@ -22,7 +22,7 @@ def main():
     for root in sys.argv[1:]:
         for a in sorted(Path(root).glob("**/align.tsv")):
             for line in a.read_text().splitlines()[1:]:
-                rid, _, s, e, c = line.split("\t")
+                rid, _, s, e, c = line.split("\t")[:5]
                 words[rid].append((float(s), float(e), float(c)))
     if not words:
         sys.exit("no align.tsv")

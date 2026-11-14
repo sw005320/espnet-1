@@ -61,6 +61,9 @@ align_batch_seconds=3840    # audio per GPU forward (0: one recording at a time)
 align_dtype=float32         # encoder precision of the alignment
 align_use_sdpa=true         # encoder attention through scaled_dot_product_attention (same alignments, 32 % less memory)
 align_tf32=false            # TF32 matrix multiplication in the alignment
+align_word_timing=segmentation  # word spans: CTC segmentation's segments, or "tokens" (the
+                                # frames of each word's tokens; see local/v2/align.py)
+align_word_pad=0.0          # seconds added on each side of every word span
 align_tasks=1               # stage 4 tasks (${cuda_cmd} --gpu 1 JOB=1:N), one GPU each
 align_shards=""             # stage 4 for these shard numbers only, e.g. "0 1"; empty: all
 dumpdir=dump/v2
@@ -166,7 +169,8 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
                 --min_pause "${align_min_pause}" \
                 --min_word_score "${align_min_word_score}" \
                 --batch_seconds "${align_batch_seconds}" --dtype "${align_dtype}" \
-                --use_sdpa "${align_use_sdpa}" --tf32 "${align_tf32}" || true
+                --use_sdpa "${align_use_sdpa}" --tf32 "${align_tf32}" \
+                --word_timing "${align_word_timing}" --word_pad "${align_word_pad}" || true
     fi
     for d in "${todo[@]}"; do
         [ -f "${d}/.aligned" ] || { log "${d} is not aligned: see ${dumpdir}/log"; exit 1; }

@@ -8,6 +8,11 @@ For a dump directory of label source "A" (vad_dump.py: wav.scp, text,
 utt2lang), each recording is aligned word by word to its transcript with
 OWSM-CTC and CTC segmentation (espnet2.bin.s2t_align). The speech is the
 union of the word spans, with pauses shorter than --min_pause bridged. A
+word spans either the segment that CTC segmentation gives it
+(--word_timing segmentation: up to 0.5 s before its first token, to its last
+token; consecutive words nearly abut) or the frames of its own tokens
+(--word_timing tokens, ctc_batch.token_word_spans), widened by --word_pad on
+each side. A
 transcript written all in capitals is lower-cased for the model (its BPE is
 case-sensitive). A recording is dropped (and listed in align_dropped.tsv) if
 its language token
@@ -129,6 +134,19 @@ def main():
         help="drop a recording if a word's CTC segmentation score is below this",
     )
     parser.add_argument(
+        "--word_timing",
+        default="segmentation",
+        choices=("segmentation", "tokens"),
+        help="word spans from CTC segmentation's segments, or from the frames of "
+        "each word's tokens (ctc_batch.token_word_spans)",
+    )
+    parser.add_argument(
+        "--word_pad",
+        type=float,
+        default=0.0,
+        help="seconds added on each side of every word span",
+    )
+    parser.add_argument(
         "--batch_seconds",
         type=float,
         default=3840.0,
@@ -212,6 +230,8 @@ def main():
             dropped.append((rid, f"language {lang[rid]} not in the model"))
         else:
             todo.append(rid)
+    from ctc_batch import token_word_spans
+
     if args.batch_seconds > 0:
         from ctc_batch import align_batched
 
@@ -237,22 +257,35 @@ def main():
             try:
                 task = aligner(np.asarray(x, dtype=np.float32), words, fs=rate)
                 segments = [tuple(map(float, s)) for s in task.segments]
-                results[rid] = (segments, None)
+                tokens = token_word_spans(
+                    task.timings,
+                    task.utt_begin_indices,
+                    task.config.index_duration_in_seconds,
+                )
+                results[rid] = (segments, tokens, None)
             except Exception as e:  # noqa: BLE001 - e.g. transcript longer than audio
-                results[rid] = (None, f"{type(e).__name__}: {e}")
+                results[rid] = (None, None, f"{type(e).__name__}: {e}")
             if i % 1000 == 0:
                 logging.info("%d / %d aligned", i, len(todo))
     t_write = time.perf_counter()
     for rid in todo:
-        segments, error = results[rid]
+        segments, tokens, error = results[rid]
         if error is not None:
             dropped.append((rid, f"alignment failed: {error}"))
             continue
         words = text[rid].split()
-        spans = [(s, e, c) for s, e, c in segments]
+        pad = args.word_pad
+        timed = segments if args.word_timing == "segmentation" else tokens
+        spans = [
+            (max(0.0, t[0] - pad), t[1] + pad, c)
+            for t, (_, _, c) in zip(timed, segments)
+        ]
         worst = min(c for _, _, c in spans)
-        for w, (s, e, c) in zip(words, spans):
-            word_rows.append(f"{rid}\t{w}\t{s:.3f}\t{e:.3f}\t{c:.4f}\n")
+        for w, (s, e, c), g, k in zip(words, spans, segments, tokens):
+            word_rows.append(
+                f"{rid}\t{w}\t{s:.3f}\t{e:.3f}\t{c:.4f}\t{g[0]:.3f}\t{g[1]:.3f}"
+                f"\t{k[0]:.3f}\t{k[1]:.3f}\n"
+            )
         if worst < args.min_word_score:
             dropped.append((rid, f"word score {worst:.2f} < {args.min_word_score}"))
             continue
@@ -295,7 +328,8 @@ def main():
                 row["speech_seconds"] = f"{speech_seconds[row['rec_id']]:.3f}"
                 g.write("\t".join(row.get(k, "") for k in MANIFEST_FIELDS) + "\n")
     (d / "align.tsv").write_text(
-        "rec_id\tword\tstart\tend\tscore\n" + "".join(word_rows)
+        "rec_id\tword\tstart\tend\tscore\tseg_start\tseg_end\ttok_start\ttok_end\n"
+        + "".join(word_rows)
     )
     (d / "align_dropped.tsv").write_text(
         "".join(f"{r}\t{why}\n" for r, why in sorted(dropped))
@@ -308,6 +342,8 @@ def main():
         model_dir=str(root),
         min_pause=args.min_pause,
         min_word_score=args.min_word_score,
+        word_timing=args.word_timing,
+        word_pad=args.word_pad,
         dtype=args.dtype,
         use_sdpa=args.use_sdpa,
         tf32=args.tf32,

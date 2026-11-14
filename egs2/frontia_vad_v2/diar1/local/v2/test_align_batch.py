@@ -66,7 +66,7 @@ def _words(d: Path):
     """{(recording, word index): (start, end, score)} of align.tsv."""
     out, index = {}, {}
     for line in (d / "align.tsv").read_text().splitlines()[1:]:
-        rid, _, s, e, c = line.split("\t")
+        rid, _, s, e, c = line.split("\t")[:5]
         index[rid] = index.get(rid, -1) + 1
         out[(rid, index[rid])] = (s, e, float(c))
     return out
