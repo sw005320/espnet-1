@@ -16,6 +16,9 @@
 #   2  score each label set, and the MFA words as the ceiling, against mfa.rttm over
 #      a grid of start pad x end pad x in-clip min_pause (local/v2/align_label_check.py
 #      score, one CPU task per label set, ${train_cmd})
+#   3  clip mode on real packs (local/v2/check_clip_mode.py): 60 dev-clean utterances
+#      written packed and one per recording, both labelled by align.py --clip_mode
+#      (${clip_check_options}); the labels of every clip must match within a frame
 # MFA is an aligner, not a human: its word times are the reference here only
 # because no human word timing of LibriSpeech exists.
 set -euo pipefail
@@ -27,6 +30,7 @@ log() {
 
 stage=0
 stop_stage=2
+clip_check_options="--word_timing tokens --pad_start 0.05 --pad_end 0.4 --min_pause 0.5"
 out=exp/label_check_librispeech
 subsets="dev-clean dev-other"
 starts="0 0.025 0.05 0.1"
@@ -72,6 +76,16 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
             --starts ${starts} --ends ${ends} --min_pauses ${min_pauses} \
             --curve_pads ${curve_pads}
     for i in $(seq 1 ${#sets[@]}); do grep -vE "^#" "${out}/score.${i}.log"; done
+fi
+
+if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
+    log "Stage 3: clip mode on real packs"
+    # shellcheck disable=SC2086
+    ${cuda_cmd} --gpu 1 "${out}/clip_mode_check.log" \
+        python3 ${v2}/check_clip_mode.py \
+            --librispeech "${VAD_CORPORA}/librispeech/LibriSpeech" \
+            --out "${out}/clip_mode_check" -- ${clip_check_options}
+    grep -E "utterances in|DIFFERS" "${out}/clip_mode_check.log"
 fi
 
 log "Successfully finished. [elapsed=${SECONDS}s]"

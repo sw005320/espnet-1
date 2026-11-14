@@ -46,6 +46,7 @@ log() {
 stage=0
 stop_stage=5
 corpora=""            # comma separated corpus names; empty: adapters.training_corpora()
+label_source=""       # with corpora empty: only the training corpora of this label source (e.g. A)
 download_jobs=8       # parallel downloads in stage 0
 v1_train="ami,chime6,notsofar,icsi"
 v1_test="dipco,ami_mh,alimeeting,aishell4,voxconverse,earnings21,ava_speech,ten_vad"
@@ -64,10 +65,17 @@ align_tf32=false            # TF32 matrix multiplication in the alignment
 align_word_timing=segmentation  # word spans: CTC segmentation's segments, "tokens" (the
                                 # frames of each word's tokens) or "forced_align" (torchaudio
                                 # CTC forced alignment); see local/v2/align.py
-align_word_pad=0.0          # seconds added on each side of every word span
+align_word_pad=0.0          # seconds added on each side of every word span (not with clip mode)
+align_clip_mode=false       # align and label every transcript clip on its own (file "clips"):
+                            # no merging across clips, padding clipped to the clip's edges
+align_pad_start=0.0         # clip mode: seconds of speech added before every segment
+align_pad_end=0.0           # clip mode: seconds of speech added after every segment
 align_tasks=1               # stage 4 tasks (${cuda_cmd} --gpu 1 JOB=1:N), one GPU each
 align_shards=""             # stage 4 for these shard numbers only, e.g. "0 1"; empty: all
 dumpdir=dump/v2
+reuse_dumpdir=""      # stage 5: also combine the corpus dumps of this directory that are not
+                      # in ${dumpdir} (a label version that redoes only some corpora)
+raw_dir=dump/raw      # stage 5: the combined train/dev sets (diar.sh --dumpdir is its parent)
 
 log "$0 $*"
 . utils/parse_options.sh
@@ -82,8 +90,9 @@ log "$0 $*"
 v2=local/v2
 
 if [ -z "${corpora}" ]; then
-    corpora=$(python3 -c "import sys; sys.path.insert(0, '${v2}'); \
-import adapters; print(','.join(adapters.training_corpora()))")
+    corpora=$(python3 -c "import sys; sys.path.insert(0, '${v2}'); import adapters; \
+print(','.join(c for c in adapters.training_corpora() \
+if not '${label_source}' or adapters.ADAPTERS[c].label_source == '${label_source}'))")
 fi
 # the corpus directories the corpora are read from
 directories=$(python3 -c "import sys; sys.path.insert(0, '${v2}'); import adapters; \
@@ -171,7 +180,9 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
                 --min_word_score "${align_min_word_score}" \
                 --batch_seconds "${align_batch_seconds}" --dtype "${align_dtype}" \
                 --use_sdpa "${align_use_sdpa}" --tf32 "${align_tf32}" \
-                --word_timing "${align_word_timing}" --word_pad "${align_word_pad}" || true
+                --word_timing "${align_word_timing}" --word_pad "${align_word_pad}" \
+                --clip_mode "${align_clip_mode}" --pad_start "${align_pad_start}" \
+                --pad_end "${align_pad_end}" || true
     fi
     for d in "${todo[@]}"; do
         [ -f "${d}/.aligned" ] || { log "${d} is not aligned: see ${dumpdir}/log"; exit 1; }
@@ -179,9 +190,15 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
 fi
 
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
-    log "Stage 5: combine into dump/raw/{train,dev}, and the corpus reports"
+    log "Stage 5: combine into ${raw_dir}/{train,dev}, and the corpus reports"
     corpus_dirs=$(find "${dumpdir}" -mindepth 1 -maxdepth 1 -type d \
         ! -name log ! -name reports | sort)
+    if [ -n "${reuse_dumpdir}" ]; then
+        for d in $(find "${reuse_dumpdir}" -mindepth 1 -maxdepth 1 -type d \
+                ! -name log ! -name reports | sort); do
+            [ -d "${dumpdir}/${d##*/}" ] || corpus_dirs+=" ${d}"
+        done
+    fi
     # a transcribed dump must have been aligned
     for d in ${corpus_dirs}; do
         while read -r t; do
@@ -191,16 +208,16 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     # the final train/dev split of each recording: official splits kept, the dev
     # groups of the other corpora chosen over all their groups (local/v2/splits.py)
     # shellcheck disable=SC2086
-    python3 ${v2}/combine.py dump/raw ${corpus_dirs}
+    python3 ${v2}/combine.py "${raw_dir}" ${corpus_dirs}
     for split in train dev; do
-        # diar.sh skips stage 2 for a set marked done in dump/raw/org/<set>
-        mkdir -p "dump/raw/org/${split}"
+        # diar.sh skips stage 2 for a set marked done in <raw_dir>/org/<set>
+        mkdir -p "${raw_dir}/org/${split}"
         for f in wav.scp utt2num_samples espnet_rttm feats_type utt2category; do
-            cp "dump/raw/${split}/${f}" "dump/raw/org/${split}/${f}"
+            cp "${raw_dir}/${split}/${f}" "${raw_dir}/org/${split}/${f}"
         done
-        echo "omniio 16k" > "dump/raw/org/${split}/.stage2_done"
-        log "dump/raw/${split}: $(wc -l < "dump/raw/${split}/wav.scp") recordings"
-        column -t -s $'\t' "dump/raw/${split}/domains.tsv"
+        echo "omniio 16k" > "${raw_dir}/org/${split}/.stage2_done"
+        log "${raw_dir}/${split}: $(wc -l < "${raw_dir}/${split}/wav.scp") recordings"
+        column -t -s $'\t' "${raw_dir}/${split}/domains.tsv"
     done
     python3 ${v2}/corpus_report.py "${dumpdir}" "${dumpdir}/reports"
     log "corpus reports: ${dumpdir}/reports"

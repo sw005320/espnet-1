@@ -114,6 +114,45 @@ def speech_of_words(words, min_pause: float):
     return out
 
 
+def clip_speech(words, clip_seconds: float, min_pause, pad_start, pad_end):
+    """Speech of one transcript clip from its word spans (seconds in the clip).
+
+    The words are joined across pauses shorter than min_pause, each segment is
+    widened by pad_start before and pad_end after, and nothing reaches past
+    the clip's edges, so the silence around the clip stays non-speech.
+    """
+    out = []
+    for s, e in speech_of_words(words, min_pause):
+        s, e = max(0.0, s - pad_start), min(clip_seconds, e + pad_end)
+        if e > s:
+            out.append((s, e))
+    return merge_intervals(out)
+
+
+def pack_speech(clips, min_pause, pad_start, pad_end):
+    """Speech of a recording from its clips, without merging across clips.
+
+    clips: [(start s, end s, word spans in the clip)]; clip_speech of each clip
+    at its offset.
+    """
+    out = []
+    for start, end, words in clips:
+        out += [
+            (start + s, start + e)
+            for s, e in clip_speech(words, end - start, min_pause, pad_start, pad_end)
+        ]
+    return sorted(out)
+
+
+def read_clips(path: Path):
+    """{rec_id: [(clip id, first sample, end sample, text)]} of a dump's clips."""
+    out = {}
+    for line in path.open():
+        rid, cid, s, e, text = line.rstrip("\n").split("\t")
+        out.setdefault(rid, []).append((cid, int(s), int(e), text))
+    return out
+
+
 def read_table(path: Path):
     return dict(
         line.rstrip("\n").split(maxsplit=1) for line in path.open() if line.strip()
@@ -151,6 +190,26 @@ def main():
         type=float,
         default=0.0,
         help="seconds added on each side of every word span",
+    )
+    parser.add_argument(
+        "--clip_mode",
+        type=lambda x: x.lower() in ("1", "true", "yes"),
+        default=False,
+        help="align and label every transcript clip (dump file clips) on its own: "
+        "words joined within a clip only, --pad_start/--pad_end clipped to the "
+        "clip's edges, a recording dropped when any of its clips fails",
+    )
+    parser.add_argument(
+        "--pad_start",
+        type=float,
+        default=0.0,
+        help="--clip_mode: seconds of speech added before every segment",
+    )
+    parser.add_argument(
+        "--pad_end",
+        type=float,
+        default=0.0,
+        help="--clip_mode: seconds of speech added after every segment",
     )
     parser.add_argument(
         "--batch_seconds",
@@ -202,6 +261,8 @@ def main():
     d = args.dump
     names = ("wav.scp", "utt2num_samples", "utt2category", "espnet_rttm")
     names += ("manifest.tsv", "text", "utt2lang")
+    if (d / "clips").exists() or (d / "before_align" / "clips").exists():
+        names += ("clips",)
     backup = d / "before_align"
     if (d / ".aligned").exists():
         logging.info("%s is already aligned", d)
@@ -243,18 +304,35 @@ def main():
         word_token_ids,
     )
 
+    # units of alignment: (unit id, rec_id, first sample, end sample or None, words);
+    # --clip_mode: every transcript clip of a recording (dump file "clips"),
+    # else the whole recording with its whole transcript
+    units = []
+    if args.clip_mode:
+        clips = read_clips(d / "clips")
+        for rid in todo:
+            for k, (_, s, e, t) in enumerate(clips[rid]):
+                units.append((f"{rid}|{k}", rid, s, e, t.split()))
+    else:
+        units = [(rid, rid, 0, None, text[rid].split()) for rid in todo]
+    cache = {}
+
+    def read(rid, s, e):
+        if rid not in cache:
+            cache.clear()
+            rate, x = audio[rid]
+            rates[rid] = rate
+            cache[rid] = (rate, x)
+        rate, x = cache[rid]
+        return rate, (x if e is None else x[s:e])
+
     use_fa = args.word_timing == "forced_align"
     if args.batch_seconds > 0:
         from ctc_batch import align_batched
 
-        def read(rid):
-            rate, x = audio[rid]
-            rates[rid] = rate
-            return rate, x
-
         items = (
-            (rid, model_words(text[rid].split()), lang[rid], lambda r=rid: read(r))
-            for rid in todo
+            (u, model_words(w), lang[rid], lambda r=rid, a=s, b=e: read(r, a, b))
+            for u, rid, s, e, w in units
         )
         results = align_batched(
             aligner,
@@ -266,14 +344,13 @@ def main():
         )
     else:
         results = {}
-        for i, rid in enumerate(todo):
-            rate, x = audio[rid]
-            rates[rid] = rate
+        for i, (u, rid, s, e, w) in enumerate(units):
+            rate, x = read(rid, s, e)
             aligner.lang_sym = lang[rid]
-            words = model_words(text[rid].split())
+            words = model_words(w)
             try:
                 task = aligner(np.asarray(x, dtype=np.float32), words, fs=rate)
-                segments = [tuple(map(float, s)) for s in task.segments]
+                segments = [tuple(map(float, s_)) for s_ in task.segments]
                 spans = {
                     "tokens": token_word_spans(
                         task.timings,
@@ -289,44 +366,65 @@ def main():
                             task.config.blank,
                             task.config.index_duration_in_seconds,
                         )
-                    except TooFewFrames as e:
-                        spans["forced_align"] = f"TooFewFrames: {e}"
-                results[rid] = (segments, spans, None)
-            except Exception as e:  # noqa: BLE001 - e.g. transcript longer than audio
-                results[rid] = (None, None, f"{type(e).__name__}: {e}")
+                    except TooFewFrames as e_:
+                        spans["forced_align"] = f"TooFewFrames: {e_}"
+                results[u] = (segments, spans, None)
+            except Exception as e_:  # noqa: BLE001 - e.g. transcript longer than audio
+                results[u] = (None, None, f"{type(e_).__name__}: {e_}")
             if i % 1000 == 0:
-                logging.info("%d / %d aligned", i, len(todo))
+                logging.info("%d / %d aligned", i, len(units))
     t_write = time.perf_counter()
     too_few = 0
+    by_rec = {}
+    for unit in units:
+        by_rec.setdefault(unit[1], []).append(unit)
     for rid in todo:
-        segments, spans, error = results[rid]
-        if error is None and use_fa and isinstance(spans["forced_align"], str):
-            error = spans["forced_align"]
-            too_few += 1
-        if error is not None:
-            dropped.append((rid, f"alignment failed: {error}"))
+        failed, clip_words, rows = None, [], []
+        for u, _, s, e, w in by_rec[rid]:
+            segments, spans, error = results[u]
+            if error is None and use_fa and isinstance(spans["forced_align"], str):
+                error = spans["forced_align"]
+                too_few += 1
+            if error is not None:
+                failed = (
+                    f"alignment failed{' in ' + u if args.clip_mode else ''}: {error}"
+                )
+                break
+            tokens = spans["tokens"]
+            if args.word_timing == "segmentation":
+                timed = segments  # (start, end, CTC segmentation confidence)
+            elif args.word_timing == "tokens":
+                timed = [(a, b, c) for (a, b), (_, _, c) in zip(tokens, segments)]
+            else:  # (start, end, mean log posterior of the word's token frames)
+                timed = spans["forced_align"]
+            off = s / rates[rid]
+            if not args.clip_mode:  # each word widened by --word_pad
+                pad = args.word_pad
+                timed = [(max(0.0, a - pad), b + pad, c) for a, b, c in timed]
+            worst = min(c for _, _, c in timed)
+            for word, (a, b, c), g, k in zip(w, timed, segments, tokens):
+                rows.append(
+                    f"{rid}\t{word}\t{off + a:.3f}\t{off + b:.3f}\t{c:.4f}"
+                    f"\t{off + g[0]:.3f}\t{off + g[1]:.3f}"
+                    f"\t{off + k[0]:.3f}\t{off + k[1]:.3f}\n"
+                )
+            if worst < args.min_word_score:
+                failed = f"word score {worst:.2f} < {args.min_word_score}" + (
+                    f" in {u}" if args.clip_mode else ""
+                )
+                break
+            end = (num_samples[rid] if e is None else e) / rates[rid]
+            clip_words.append((off, end, [(a, b) for a, b, _ in timed]))
+        word_rows += rows
+        if failed:
+            dropped.append((rid, failed))
             continue
-        words = text[rid].split()
-        pad = args.word_pad
-        tokens = spans["tokens"]
-        if args.word_timing == "segmentation":
-            timed = segments  # (start, end, CTC segmentation confidence)
-        elif args.word_timing == "tokens":
-            timed = [(s, e, c) for (s, e), (_, _, c) in zip(tokens, segments)]
-        else:  # (start, end, mean log posterior of the word's token frames)
-            timed = spans["forced_align"]
-        spans_ = [(max(0.0, s - pad), e + pad, c) for s, e, c in timed]
-        worst = min(c for _, _, c in spans_)
-        for w, (s, e, c), g, k in zip(words, spans_, segments, tokens):
-            word_rows.append(
-                f"{rid}\t{w}\t{s:.3f}\t{e:.3f}\t{c:.4f}\t{g[0]:.3f}\t{g[1]:.3f}"
-                f"\t{k[0]:.3f}\t{k[1]:.3f}\n"
+        if args.clip_mode:
+            speech[rid] = pack_speech(
+                clip_words, args.min_pause, args.pad_start, args.pad_end
             )
-        if worst < args.min_word_score:
-            dropped.append((rid, f"word score {worst:.2f} < {args.min_word_score}"))
-            continue
-        spans = spans_
-        speech[rid] = speech_of_words([(s, e) for s, e, _ in spans], args.min_pause)
+        else:
+            speech[rid] = speech_of_words(clip_words[0][2], args.min_pause)
 
     kept = sorted(speech)
     rttm = []
@@ -350,7 +448,8 @@ def main():
     for name in names:
         shutil.copy(d / name, backup / name)
     keep = set(kept)
-    for name in ("wav.scp", "utt2num_samples", "utt2category", "text", "utt2lang"):
+    keyed = ("wav.scp", "utt2num_samples", "utt2category", "text", "utt2lang")
+    for name in keyed + (("clips",) if "clips" in names else ()):
         lines = (d / name).read_text().splitlines(keepends=True)
         (d / name).write_text(
             "".join(x for x in lines if x.split(maxsplit=1)[0] in keep)
@@ -380,6 +479,9 @@ def main():
         min_pause=args.min_pause,
         min_word_score=args.min_word_score,
         word_timing=args.word_timing,
+        clip_mode=args.clip_mode,
+        pad_start=args.pad_start,
+        pad_end=args.pad_end,
         forced_align_too_few_frames=too_few if use_fa else None,
         word_pad=args.word_pad,
         dtype=args.dtype,

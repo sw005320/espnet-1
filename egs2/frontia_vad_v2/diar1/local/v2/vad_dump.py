@@ -130,6 +130,9 @@ class VadDumpWriter:
         self._buffered = set()
         self.text: Dict[str, str] = {}
         self.lang_sym: Dict[str, str] = {}
+        # label source A: the transcript clips of each recording, (clip id, first
+        # sample, end sample, text); a pack lists its clips at their offsets
+        self.clips: Dict[str, List[tuple]] = {}
 
     def skip(self, source: str, reason: str):
         """Record a source that could not be read (listed in skipped.txt)."""
@@ -240,14 +243,15 @@ class VadDumpWriter:
         pack = self._packs.pop(key, [])
         if not pack:
             return
-        offset, xs, intervals, texts, sources = 0, [], [], [], []
+        offset, xs, intervals, texts, sources, clips = 0, [], [], [], [], []
         for rid, x, ivs, meta, text in pack:
             t0 = offset / self.fs
             intervals += [(t0 + s, t0 + e) for s, e in ivs]
             xs.append(x)
-            offset += len(x)
             if text is not None:
                 texts.append(text)
+                clips.append((rid, offset, offset + len(x), " ".join(text.split())))
+            offset += len(x)
             sources.append(meta["source"] or rid)
         first = pack[0]
         meta = dict(first[3])
@@ -258,12 +262,24 @@ class VadDumpWriter:
         meta["group"] = ";".join(sorted({p[3]["group"] for p in pack if p[3]["group"]}))
         text = " ".join(texts) if texts else None
         self._write(
-            f"{first[0]}+{len(pack)}", np.concatenate(xs), intervals, meta, text, key[0]
+            f"{first[0]}+{len(pack)}",
+            np.concatenate(xs),
+            intervals,
+            meta,
+            text,
+            key[0],
+            clips=clips,
         )
 
-    def _write(self, rid, x, intervals, meta, text, lang_sym):
-        """Write one mono recording with its speech intervals (seconds)."""
+    def _write(self, rid, x, intervals, meta, text, lang_sym, clips=None):
+        """Write one mono recording with its speech intervals (seconds).
+
+        clips: the transcript clips of a pack (_flush); a recording with a
+        transcript that is not a pack is one clip.
+        """
         n = len(x)
+        if text is not None:
+            self.clips[rid] = clips or [(rid, 0, n, " ".join(text.split()))]
         self.audio[rid] = self.fs, x
         self.num_samples[rid] = n
         speech_samples = 0
@@ -312,6 +328,14 @@ class VadDumpWriter:
             )
             (self.dir / "utt2lang").write_text(
                 "".join(f"{r} {self.lang_sym[r]}\n" for r in ids)
+            )
+            # <rec_id> <clip id> <first sample> <end sample> <text>, in order
+            (self.dir / "clips").write_text(
+                "".join(
+                    f"{r}\t{c}\t{s}\t{e}\t{t}\n"
+                    for r in ids
+                    for c, s, e, t in self.clips[r]
+                )
             )
         with (self.dir / "manifest.tsv").open("w") as f:
             f.write("\t".join(MANIFEST_FIELDS) + "\n")
