@@ -380,7 +380,7 @@ def main():
         by_rec.setdefault(unit[1], []).append(unit)
     for rid in todo:
         failed, clip_words, rows = None, [], []
-        for u, _, s, e, w in by_rec[rid]:
+        for k_clip, (u, _, s, e, w) in enumerate(by_rec[rid]):
             segments, spans, error = results[u]
             if error is None and use_fa and isinstance(spans["forced_align"], str):
                 error = spans["forced_align"]
@@ -406,7 +406,7 @@ def main():
                 rows.append(
                     f"{rid}\t{word}\t{off + a:.3f}\t{off + b:.3f}\t{c:.4f}"
                     f"\t{off + g[0]:.3f}\t{off + g[1]:.3f}"
-                    f"\t{off + k[0]:.3f}\t{off + k[1]:.3f}\n"
+                    f"\t{off + k[0]:.3f}\t{off + k[1]:.3f}\t{k_clip}\n"
                 )
             if worst < args.min_word_score:
                 failed = f"word score {worst:.2f} < {args.min_word_score}" + (
@@ -464,8 +464,8 @@ def main():
                 row["speech_seconds"] = f"{speech_seconds[row['rec_id']]:.3f}"
                 g.write("\t".join(row.get(k, "") for k in MANIFEST_FIELDS) + "\n")
     (d / "align.tsv").write_text(
-        "rec_id\tword\tstart\tend\tscore\tseg_start\tseg_end\ttok_start\ttok_end\n"
-        + "".join(word_rows)
+        "rec_id\tword\tstart\tend\tscore\tseg_start\tseg_end\ttok_start\ttok_end"
+        "\tclip\n" + "".join(word_rows)
     )
     (d / "align_dropped.tsv").write_text(
         "".join(f"{r}\t{why}\n" for r, why in sorted(dropped))

@@ -30,7 +30,11 @@ log() {
 
 stage=0
 stop_stage=2
-clip_check_options="--word_timing tokens --pad_start 0.05 --pad_end 0.4 --min_pause 0.5"
+# the model and settings of stage 4 (local/data.sh), clip mode with token timing
+clip_check_options="--model_tag espnet/owsm_ctc_v4_1B --revision 6075bf3d42e6037d1ef7abd7c5558ade886e6eaa"
+clip_check_options+=" --batch_seconds 3840 --dtype float32 --use_sdpa true --tf32 false"
+clip_check_options+=" --min_word_score -15 --word_timing tokens --pad_start 0.05 --pad_end 0.4"
+clip_check_options+=" --min_pause 0.5"
 out=exp/label_check_librispeech
 subsets="dev-clean dev-other"
 starts="0 0.025 0.05 0.1"

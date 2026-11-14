@@ -81,3 +81,45 @@ def test_vad_dump_writes_the_clips_of_a_pack(tmp_path):
         ("c-u2", 56000, 88000, "word 2"),
     ]
     assert clips["c-u3"] == [("c-u3", 0, 96000, "word 3")]
+
+
+def test_relabel_matches_pack_speech(tmp_path):
+    import json
+
+    from relabel import recording_speech, relabel
+
+    fs = 16000
+    # a pack of 2 clips: 0-3 s and 3-6 s; words in recording time with clip index
+    clips = [("a", 0, 3 * fs, "one two"), ("b", 3 * fs, 6 * fs, "three")]
+    words = [(0, 1.0, 1.2), (0, 1.6, 2.0), (1, 4.0, 4.5)]
+    segs = recording_speech(words, clips, fs, 0.5, 0.05, 0.4)
+    # the 0.4 s pause in clip a is below min_pause 0.5: joined
+    assert segs == pytest.approx([(0.95, 2.4), (3.95, 4.9)])
+    # the whole relabel step on a dump with these files
+    (tmp_path / "wav.scp").write_text("p+2 x\n")
+    (tmp_path / "utt2num_samples").write_text(f"p+2 {6 * fs}\n")
+    (tmp_path / "clips").write_text(
+        "".join(f"p+2\t{c}\t{s}\t{e}\t{t}\n" for c, s, e, t in clips)
+    )
+    rows = "".join(f"p+2\tw\t{s}\t{e}\t-1\t0\t0\t{s}\t{e}\t{k}\n" for k, s, e in words)
+    (tmp_path / "align.tsv").write_text("header\n" + rows)
+    from vad_dump import MANIFEST_FIELDS
+
+    row = {k: "" for k in MANIFEST_FIELDS}
+    row.update(rec_id="p+2", seconds="6.000", speech_seconds="0")
+    (tmp_path / "manifest.tsv").write_text(
+        "\t".join(MANIFEST_FIELDS)
+        + "\n"
+        + "\t".join(row[k] for k in MANIFEST_FIELDS)
+        + "\n"
+    )
+    (tmp_path / "align_config.json").write_text(json.dumps({"clip_mode": True}))
+    hours = relabel(tmp_path, "tokens", 0.5, 0.05, 0.4)
+    assert hours * 3600 == pytest.approx(1.45 + 0.95)
+    rttm = (tmp_path / "espnet_rttm").read_text().splitlines()
+    assert rttm[0] == "END p+2 <NA> <NA> 96000 <NA> <NA> <NA> <NA>"
+    assert "SPEAKER p+2 1 15200 38400" in rttm[1]
+    labels = json.loads((tmp_path / "align_config.json").read_text())["labels"]
+    assert labels == dict(
+        word_timing="tokens", min_pause=0.5, pad_start=0.05, pad_end=0.4
+    )
