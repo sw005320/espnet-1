@@ -39,3 +39,18 @@ def test_grid_search_finds_the_padding_that_matches_the_reference():
 def test_widen_extends_only_a_dimension_whose_best_is_its_largest_value():
     assert widen([0, 0.1, 0.2], 0.2, 0.1) == [0, 0.1, 0.2, 0.3, 0.4]
     assert widen([0, 0.1, 0.2], 0.1, 0.1) == [0, 0.1, 0.2]
+
+
+def test_pauses_split_inside_and_between_utterances():
+    from align_label_check import labelled_segments, split_pauses
+
+    rows = [
+        ("r", "u", 1.0, 1.2),
+        ("r", "u", 2.0, 2.2),  # 0.8 s inside u: kept at min_pause 0.5
+        ("r", "v", 5.0, 5.5),  # 2.8 s between u and v
+    ]
+    inside, between = split_pauses(labelled_segments(rows, 0.5, 0.0, 0.0))
+    assert inside == pytest.approx([0.8])
+    assert between == pytest.approx([2.8])
+    inside, between = split_pauses(labelled_segments(rows, float("inf"), 0.0, 0.0))
+    assert inside == [] and between == pytest.approx([2.8])

@@ -434,6 +434,124 @@ def widen(values, best, step):
     return values
 
 
+def labelled_segments(word_rows, min_pause, pad_start, pad_end):
+    """{rid: [(start, end, {utterance ids})]}: labels() with their utterances.
+
+    Each merged segment keeps the transcript utterances it comes from.
+    """
+    by_utt = collections.defaultdict(list)
+    for rid, uid, s, e in word_rows:
+        by_utt[(rid, uid)].append((s, e))
+    per_rec = collections.defaultdict(list)
+    for (rid, uid), spans in by_utt.items():
+        for s, e in merge(spans, min_pause):
+            per_rec[rid].append((max(0.0, s - pad_start), e + pad_end, uid))
+    out = {}
+    for rid, segs in per_rec.items():
+        merged = []
+        for s, e, uid in sorted(segs):
+            if merged and s <= merged[-1][1]:
+                merged[-1] = (
+                    merged[-1][0],
+                    max(merged[-1][1], e),
+                    merged[-1][2] | {uid},
+                )
+            else:
+                merged.append((s, e, {uid}))
+        out[rid] = merged
+    return out
+
+
+def split_pauses(segs):
+    """(pauses inside one utterance, pauses between utterances) of segments.
+
+    A pause is inside when both neighbouring segments share an utterance.
+    """
+    inside, between = [], []
+    for segs_ in segs.values():
+        for (s1, e1, u1), (s2, e2, u2) in zip(segs_, segs_[1:]):
+            (inside if u1 & u2 else between).append(s2 - e1)
+    return inside, between
+
+
+def utterance_spans(xml_rows):
+    """{rid: [(start, end)]} of the transcript utterances (first to last word)."""
+    by = collections.defaultdict(list)
+    for rid, uid, s, e in xml_rows:
+        by[(rid, uid)].append((s, e))
+    out = collections.defaultdict(list)
+    for (rid, _), w in by.items():
+        out[rid].append((min(s for s, _ in w), max(e for _, e in w)))
+    return out
+
+
+def split_reference_pauses(refr, utts):
+    """(pauses inside a transcript utterance, other pauses) of the reference.
+
+    A pause is inside when some utterance of the recording spans it whole.
+    """
+    inside, between = [], []
+    for rid, segs in refr.items():
+        spans = utts.get(rid, [])
+        for (s1, e1), (s2, e2) in zip(segs, segs[1:]):
+            hit = any(us <= e1 and s2 <= ue for us, ue in spans)
+            (inside if hit else between).append(s2 - e1)
+    return inside, between
+
+
+def describe(g):
+    g = np.array(g)
+    if not len(g):
+        return "0"
+    q = " / ".join(f"{np.percentile(g, p):.2f}" for p in (10, 50, 90))
+    return f"{len(g)} (p10/50/90 {q} s, total {g.sum() / 3600:.2f} h)"
+
+
+def cmd_pauses(a):
+    """Where the pauses of a label set come from, and min_pause = infinity."""
+    ref = collections.defaultdict(list)
+    for line in open(a.ref):
+        p = line.split()
+        if p and p[0] == "SPEAKER":
+            ref[p[1]].append((float(p[3]), float(p[3]) + float(p[4])))
+    out = Path(a.out)
+    durs = {
+        x.split("\t")[0]: float(x.split("\t")[1]) for x in open(out / "durations.tsv")
+    }
+    refr = {r: merge(ref[r]) for r in durs}
+    scorer = Scorer(refr, durs)
+    sets, _ = label_sets(out)
+    rows = sets[a.label_set]
+    segs = labelled_segments(rows, a.min_pause, a.pad_start, a.pad_end)
+    inside, between = split_pauses(segs)
+    print(
+        f"== {out.name} {a.label_set} at start pad {a.pad_start * 1000:.0f} ms, "
+        "end pad "
+        f"{a.pad_end * 1000:.0f} ms, min_pause {a.min_pause:g} s: pauses inside one "
+        f"utterance {describe(inside)}; between utterances {describe(between)}"
+    )
+    rin, rbe = split_reference_pauses(refr, utterance_spans(sets["xml_words"]))
+    print(
+        f"   reference: pauses inside a transcript utterance {describe(rin)}; "
+        f"outside {describe(rbe)}"
+    )
+    ev = scorer(labels(rows, a.min_pause, a.pad_start, a.pad_end))
+    print(
+        f"   DetER at that setting {ev['deter']:.2f} (miss {ev['miss']:.2f}, "
+        f"FA {ev['fa']:.2f})"
+    )
+    for name in [n for n in sets if n in a.inf_sets]:
+        res = grid_search(sets[name], scorer, a.starts, a.ends, [float("inf")])
+        d, miss, fa, ps, pe, _ = res[0]
+        print(
+            f"   {name} min_pause infinity (each utterance first to last word): best "
+            f"start pad {ps * 1000:.0f} ms, end pad {pe * 1000:.0f} ms -> "
+            f"DetER {d:.2f} "
+            f"(miss {miss:.2f}, FA {fa:.2f})",
+            flush=True,
+        )
+
+
 def cmd_score(a):
     ref = collections.defaultdict(list)
     for line in open(a.ref):
@@ -567,8 +685,24 @@ def main():
     sc.add_argument(
         "--thresholds", type=float, nargs="+", default=[-2, -5, -10, -15, -20, -30]
     )
+    pa = sub.add_parser("pauses")
+    pa.add_argument("--out", required=True)
+    pa.add_argument("--ref", required=True)
+    pa.add_argument("--label_set", default="tokens")
+    pa.add_argument("--pad_start", type=float, default=0.05)
+    pa.add_argument("--pad_end", type=float, default=0.4)
+    pa.add_argument("--min_pause", type=float, default=5.0)
+    pa.add_argument(
+        "--inf_sets",
+        nargs="+",
+        default=["segmentation", "tokens", "forced_align", "xml_words"],
+    )
+    pa.add_argument("--starts", type=float, nargs="+", default=[0, 0.025, 0.05, 0.1])
+    pa.add_argument(
+        "--ends", type=float, nargs="+", default=[0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+    )
     a = ap.parse_args()
-    cmd_align(a) if a.cmd == "align" else cmd_score(a)
+    {"align": cmd_align, "score": cmd_score, "pauses": cmd_pauses}[a.cmd](a)
 
 
 if __name__ == "__main__":
