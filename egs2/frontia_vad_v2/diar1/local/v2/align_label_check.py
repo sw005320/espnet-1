@@ -720,6 +720,16 @@ def cmd_score(a):
         ):
             if best == max(vals):
                 widened.append(label)
+        if a.print_grid:
+            for r in sorted(res, key=lambda r: (r[5], r[3], r[4])):
+                print(
+                    f"  {name}: GRID start {r[3] * 1000:.0f} ms, "
+                    f"end {r[4] * 1000:.0f} ms, "
+                    f"min_pause {r[5]:g} s: DetER {r[0]:.2f} (miss {r[1]:.2f}, "
+                    f"FA {r[2]:.2f})"
+                )
+        if a.no_widen:
+            widened = []
         if widened:
             starts = widen(starts, ps, 0.05)
             ends = widen(ends, pe, 0.1)
@@ -830,6 +840,8 @@ def main():
     sc.add_argument(
         "--thresholds", type=float, nargs="+", default=[-2, -5, -10, -15, -20, -30]
     )
+    sc.add_argument("--print_grid", action="store_true", help="every grid cell")
+    sc.add_argument("--no_widen", action="store_true", help="keep the grid as given")
     sc.add_argument(
         "--curve_pads",
         type=float,
