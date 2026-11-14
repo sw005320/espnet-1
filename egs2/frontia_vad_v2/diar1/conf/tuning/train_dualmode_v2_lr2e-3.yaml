@@ -71,7 +71,7 @@ chunk_upsampling_factor: 0.3
 chunk_left_context: 16000
 batch_size: 256      # per mini-batch, all GPUs: 64 windows per GPU on 4 GPUs
 accum_grad: 4        # 1024 windows per update
-num_workers: 15      # per GPU process (16 cores of a GPU share on an rt_HF node; 24 was slower)
+num_workers: 15      # per GPU process (profiled: 24 was slower than 16 on 4-GPU DDP)
 seed: 1
 optim: adam
 optim_conf:
