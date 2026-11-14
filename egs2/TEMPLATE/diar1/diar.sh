@@ -37,7 +37,7 @@ nj=32                   # The number of parallel jobs.
 dumpdir=dump            # Directory to dump features.
 inference_nj=32         # The number of parallel jobs in decoding.
 gpu_inference=false     # Whether to perform gpu decoding.
-inference_max_jobs_run= # Stage 6: most inference jobs at once (--max-jobs-run; run.pl allows one per GPU with --gpu; pbs.pl ignores it).
+inference_max_jobs_run= # Stage 6: most inference jobs at once (--max-jobs-run; run.pl allows one per GPU with --gpu; pbs.pl: -W max_run_subjobs).
 expdir=exp              # Directory to save experiments.
 python=python3          # Specify python to execute espnet commands
 
@@ -108,7 +108,8 @@ Options:
     --inference_nj       # The number of parallel jobs in inference (default="${inference_nj}").
     --gpu_inference      # Whether to use gpu for inference (default="${gpu_inference}").
     --inference_max_jobs_run # Stage 6: most inference jobs at once; passed as --max-jobs-run to run.pl,
-                         # queue.pl and slurm.pl, ignored by pbs.pl (default="${inference_max_jobs_run}").
+                         # queue.pl, slurm.pl and pbs.pl (an array's -W max_run_subjobs on PBS
+                         # Professional) (default="${inference_max_jobs_run}").
     --dumpdir            # Directory to dump features (default="${dumpdir}").
     --expdir             # Directory to save experiments (default="${expdir}").
     --python             # Specify python to execute espnet commands (default="${python}").
