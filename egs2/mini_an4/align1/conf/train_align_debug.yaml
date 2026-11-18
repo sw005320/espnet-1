@@ -39,3 +39,9 @@ batch_type: folded
 batch_size: 2
 max_epoch: 1
 num_iters_per_epoch: 2
+# the same criterion as the LibriSpeech recipe, so that CI checks that
+# alignment loads the model training saved (valid.loss_hmm.ave.pth)
+best_model_criterion:
+-   - valid
+    - loss_hmm
+    - min

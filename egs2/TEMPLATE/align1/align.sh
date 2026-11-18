@@ -82,7 +82,8 @@ num_splits_align=1    # Number of splitting for the training corpus.
 # Alignment related
 inference_config=     # Config for alignment (align_inference.py options).
 inference_args=       # Arguments for alignment.
-inference_model=valid.loss.ave.pth # Aligner model path for alignment.
+inference_model=      # Aligner model file in ${align_exp}; empty: the averaged model of the
+                      # first best_model_criterion in ${align_exp}/config.yaml.
 align_out_tag=        # Suffix to the alignment output dir.
 
 # [Task dependent] Set the datadir name created by local/data.sh
@@ -134,7 +135,8 @@ Options:
     # Alignment related
     --inference_config # Config for alignment (default="${inference_config}").
     --inference_args   # Arguments for alignment (default="${inference_args}").
-    --inference_model  # Model path for alignment (default="${inference_model}").
+    --inference_model  # Model file for alignment; empty: the averaged model of the first
+                       # best_model_criterion of the training config (default="${inference_model}").
     --align_out_tag    # Suffix to the alignment output dir (default="${align_out_tag}").
 
     # [Task dependent] Set the datadir name created by local/data.sh
@@ -179,17 +181,29 @@ fi
 [ -z "${align_stats_dir}" ] && align_stats_dir="${expdir}/align_stats_raw_${lang}_char"
 [ -z "${align_exp}" ] && align_exp="${expdir}/align_${align_tag}"
 
-if [ -z "${align_out_tag}" ]; then
-    if [ -n "${inference_config}" ]; then
-        align_out_tag="$(basename "${inference_config}" .yaml)"
-    else
-        align_out_tag=align
+# The model file and the output tag of alignment are set once training has
+# written ${align_exp}/config.yaml (stages 7 and 8).
+set_inference_model() {
+    if [ -z "${inference_model}" ]; then
+        inference_model=$(${python} -c "
+import sys, yaml
+with open(sys.argv[1]) as f:
+    phase, key, _ = yaml.safe_load(f)['best_model_criterion'][0]
+print(f'{phase}.{key}.ave.pth')
+" "${align_exp}/config.yaml")
     fi
-    if [ -n "${inference_args}" ]; then
-        align_out_tag+="$(echo "${inference_args}" | sed -e "s/--/\_/g" -e "s/[ |=]//g")"
+    if [ -z "${align_out_tag}" ]; then
+        if [ -n "${inference_config}" ]; then
+            align_out_tag="$(basename "${inference_config}" .yaml)"
+        else
+            align_out_tag=align
+        fi
+        if [ -n "${inference_args}" ]; then
+            align_out_tag+="$(echo "${inference_args}" | sed -e "s/--/\_/g" -e "s/[ |=]//g")"
+        fi
+        align_out_tag+="_model_$(echo "${inference_model}" | sed -e "s/\//_/g" -e "s/\.[^.]*$//g")"
     fi
-    align_out_tag+="_model_$(echo "${inference_model}" | sed -e "s/\//_/g" -e "s/\.[^.]*$//g")"
-fi
+}
 
 # ========================== Main stages start from here. ==========================
 
@@ -398,7 +412,12 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
 fi
 
 if [ ${stage} -le 7 ] && [ ${stop_stage} -ge 7 ]; then
-    log "Stage 7: Alignment: training_dir=${align_exp}"
+    set_inference_model
+    log "Stage 7: Alignment: training_dir=${align_exp}, model=${inference_model}"
+    if [ ! -e "${align_exp}/${inference_model}" ]; then
+        log "Error: ${align_exp}/${inference_model} does not exist"
+        exit 1
+    fi
     if ${gpu_inference}; then
         _cmd="${cuda_cmd}"
         _ngpu=1
@@ -449,6 +468,7 @@ if [ ${stage} -le 7 ] && [ ${stop_stage} -ge 7 ]; then
 fi
 
 if [ ${stage} -le 8 ] && [ ${stop_stage} -ge 8 ]; then
+    set_inference_model
     log "Stage 8: Scoring"
     if [ -x local/score.sh ]; then
         for dset in ${test_sets}; do
