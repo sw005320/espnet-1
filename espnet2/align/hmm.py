@@ -48,7 +48,9 @@ class StateGraph:
         preds: per state, the (predecessor state, log transition prob) pairs,
             the self-loop included.
         init: (state, log prob) pairs of the states a path may start in.
-        finals: states a path may end in.
+        finals: (state, log prob) pairs of the states a path may end in, with
+            the probability of leaving that state and skipping every
+            remaining (optional) segment.
         min_frames: the fewest frames any complete path needs.
     """
 
@@ -57,7 +59,7 @@ class StateGraph:
     state_pos: List[int]
     preds: List[List[Tuple[int, float]]]
     init: List[Tuple[int, float]]
-    finals: List[int]
+    finals: List[Tuple[int, float]]
     min_frames: int
 
 
@@ -74,7 +76,9 @@ def build_graph(
     states of the following segments: a skippable segment takes its ``prob``
     share and passes the rest on to the segment after it. The initial
     distribution is split the same way from the first segment. Inner states
-    of a unit move to the next state of the unit.
+    of a unit move to the next state of the unit. The share left after all
+    remaining segments are skipped is the probability of ending the path
+    there, so every state's out-going probabilities sum to 1.
 
     Args:
         segments: the utterance's segments in time order.
@@ -112,10 +116,11 @@ def build_graph(
         raise ValueError("every segment is skippable; the path could be empty")
 
     # entry[k]: (entry state, prob) of a path that next enters a unit at or
-    # after segment k; ends[k]: whether a path may end before segment k
+    # after segment k; skip_rest[k]: probability of skipping segment k and
+    # every segment after it (0 when one of them is mandatory)
     K = len(segments)
     entry: List[List[Tuple[int, float]]] = [[] for _ in range(K + 1)]
-    ends = [True] * (K + 1)
+    skip_rest = [1.0] * (K + 1)
     for k in range(K - 1, -1, -1):
         seg, spans = segments[k], seg_units[k]
         share = seg.prob if seg.skippable else 1.0
@@ -124,12 +129,12 @@ def build_graph(
             [(s, (1.0 - share) * p) for s, p in entry[k + 1]] if seg.skippable else []
         )
         entry[k] = here + rest
-        ends[k] = seg.skippable and ends[k + 1]
+        skip_rest[k] = (1.0 - share) * skip_rest[k + 1]
 
     preds: List[List[Tuple[int, float]]] = [
         [(s, math.log(loop_of(state_unit[s])))] for s in range(len(state_class))
     ]
-    finals: List[int] = []
+    finals: List[Tuple[int, float]] = []
     for k, spans in enumerate(seg_units):
         for first, last in spans:
             move = 1.0 - loop_of(state_unit[first])
@@ -137,8 +142,8 @@ def build_graph(
                 preds[s + 1].append((s, math.log(move)))
             for t, p in entry[k + 1]:
                 preds[t].append((last, math.log(move * p)))
-            if ends[k + 1]:
-                finals.append(last)
+            if skip_rest[k + 1] > 0:
+                finals.append((last, math.log(move * skip_rest[k + 1])))
 
     # fewest frames: shortest unit of every mandatory segment
     shortest = sum(
@@ -165,7 +170,7 @@ class PaddedGraphs:
     pred_idx: torch.Tensor  # (B, S, K) long
     pred_logp: torch.Tensor  # (B, S, K) float, -inf where unused
     init_logp: torch.Tensor  # (B, S) float, -inf where not initial
-    final_mask: torch.Tensor  # (B, S) bool
+    final_logp: torch.Tensor  # (B, S) float, -inf where not final
     num_states: torch.Tensor  # (B,) long
 
 
@@ -179,7 +184,7 @@ def pad_graphs(graphs: Sequence[StateGraph], device=None) -> PaddedGraphs:
     pred_idx = torch.zeros(B, S, K, dtype=torch.long)
     pred_logp = torch.full((B, S, K), neg_inf)
     init_logp = torch.full((B, S), neg_inf)
-    final_mask = torch.zeros(B, S, dtype=torch.bool)
+    final_logp = torch.full((B, S), neg_inf)
     for b, g in enumerate(graphs):
         n = len(g.state_class)
         state_class[b, :n] = torch.tensor(g.state_class)
@@ -189,14 +194,15 @@ def pad_graphs(graphs: Sequence[StateGraph], device=None) -> PaddedGraphs:
                 pred_logp[b, s, k] = lp
         for s, lp in g.init:
             init_logp[b, s] = lp
-        final_mask[b, g.finals] = True
+        for s, lp in g.finals:
+            final_logp[b, s] = lp
     num_states = torch.tensor([len(g.state_class) for g in graphs])
     return PaddedGraphs(
         state_class=state_class.to(device),
         pred_idx=pred_idx.to(device),
         pred_logp=pred_logp.to(device),
         init_logp=init_logp.to(device),
-        final_mask=final_mask.to(device),
+        final_logp=final_logp.to(device),
         num_states=num_states.to(device),
     )
 
@@ -225,15 +231,16 @@ def hmm_forward(
     # logsumexp whose inputs are all -inf has NaN gradients (0 * NaN), which
     # would reach the network through padded and unreachable states.
     pred_logp = graphs.pred_logp.to(emit.dtype).clamp(min=_FLOOR)
+    final_logp = graphs.final_logp.to(emit.dtype).clamp(min=_FLOOR)
     alpha = (graphs.init_logp.to(emit.dtype) + emit[:, 0]).clamp(min=_FLOOR)
     final = torch.full((B,), _FLOOR, dtype=emit.dtype, device=emit.device)
-    final = _take_final(final, alpha, graphs.final_mask, lengths == 1)
+    final = _take_final(final, alpha, final_logp, lengths == 1)
     batch = torch.arange(B, device=emit.device)[:, None, None]
     for t in range(1, T):
         prev = alpha[batch, graphs.pred_idx]  # (B, S, K)
         alpha = torch.logsumexp(prev + pred_logp, dim=2) + emit[:, t]
         alpha = alpha.clamp(min=_FLOOR)
-        final = _take_final(final, alpha, graphs.final_mask, lengths == t + 1)
+        final = _take_final(final, alpha, final_logp, lengths == t + 1)
     # an utterance whose best final score is at the floor has no complete path
     return final.masked_fill(final < _FLOOR / 2, float("-inf"))
 
@@ -242,10 +249,10 @@ def hmm_forward(
 _FLOOR = -1.0e30
 
 
-def _take_final(final, alpha, final_mask, ends_here):
+def _take_final(final, alpha, final_logp, ends_here):
     if not bool(ends_here.any()):
         return final
-    score = torch.logsumexp(alpha.masked_fill(~final_mask, _FLOOR), dim=1)
+    score = torch.logsumexp(alpha + final_logp, dim=1)
     return torch.where(ends_here, score, final)
 
 
@@ -270,7 +277,7 @@ def hmm_viterbi(
         backptr.append(graphs.pred_idx.gather(2, arg.unsqueeze(2)).squeeze(2))
         delta = best + emit[:, t]
         last = torch.where((lengths == t + 1).unsqueeze(1), delta, last)
-    end = last.masked_fill(~graphs.final_mask, float("-inf"))
+    end = last + graphs.final_logp.to(last.dtype)
     paths = []
     for b in range(B):
         if not bool(torch.isfinite(end[b]).any()):

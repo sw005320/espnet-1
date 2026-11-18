@@ -15,14 +15,19 @@ from espnet2.align.hmm import (
 
 
 def _paths(graph, T):
-    """Every state path of length T (start in init, end in finals)."""
+    """Every state path of length T, with its score.
+
+    A path starts in an initial state and ends in a final state; its score
+    adds the initial, transition and final log-probabilities.
+    """
     preds = {s: dict(p) for s, p in enumerate(graph.preds)}
     init = dict(graph.init)
+    finals = dict(graph.finals)
     n = len(graph.state_class)
     for seq in itertools.product(range(n), repeat=T):
-        if seq[0] not in init or seq[-1] not in graph.finals:
+        if seq[0] not in init or seq[-1] not in finals:
             continue
-        score = init[seq[0]]
+        score = init[seq[0]] + finals[seq[-1]]
         ok = True
         for a, b in zip(seq, seq[1:]):
             if a not in preds[b]:
@@ -122,7 +127,7 @@ def test_viterbi_respects_topology():
     path = hmm_viterbi(emit, torch.tensor([T]), pg)[0]
     allowed = {s: {p for p, _ in g.preds[s]} for s in range(len(g.state_class))}
     assert path[0] in dict(g.init)
-    assert path[-1] in g.finals
+    assert path[-1] in dict(g.finals)
     for a, b in zip(path, path[1:]):
         assert a in allowed[b]
     # every unit is visited for at least its number of states
@@ -147,8 +152,8 @@ def test_all_skippable_is_rejected():
 
 
 def test_transition_probs():
-    # out-going probability is 1 for every state except a final state, which
-    # keeps the end probability; skips pass on (1 - prob)
+    # out-going probability (loop, moves and the end probability of a final
+    # state) is 1 for every state; skips pass on (1 - prob)
     segs = [
         Segment((0,), True, 0.5),
         Segment((1,)),
@@ -160,11 +165,10 @@ def test_transition_probs():
     for s, plist in enumerate(g.preds):
         for p, lp in plist:
             out[p] += math.exp(lp)
-    for s, total in out.items():
-        if s in g.finals:
-            assert total == pytest.approx(0.5)  # unit 2 only loops at the end
-        else:
-            assert total == pytest.approx(1.0)
+    for s, lp in g.finals:
+        out[s] += math.exp(lp)
+    for total in out.values():
+        assert total == pytest.approx(1.0)
     assert sum(math.exp(lp) for _, lp in g.init) == pytest.approx(1.0)
     # state of unit 1 -> pause units get 0.4 / 2 each, unit 2 gets 0.6
     s1 = g.state_unit.index(1)
@@ -201,3 +205,19 @@ def test_gradients_finite_with_padding_and_unreachable_states():
     ll.masked_fill(~torch.isfinite(ll), 0.0).sum().backward()
     assert torch.isfinite(logits.grad).all()
     assert logits.grad[1].abs().sum() == 0
+
+
+def test_final_transitions_count():
+    # a mandatory 1-state unit then an optional 1-state pause entered with
+    # probability 0.9, self-loops 0.5, two frames, equal emissions:
+    # no pause = 0.5 (loop) * 0.5 * 0.1 (leave, skip the pause) = 0.025,
+    # pause = 0.5 * 0.9 (enter the pause) * 0.5 (leave it) = 0.225
+    g = build_graph([Segment((1,)), Segment((0,), True, 0.9)], lambda u: 1, 1, 0.5)
+    pg = pad_graphs([g])
+    emit = torch.zeros(1, 2, len(g.state_class), dtype=torch.float64)
+    path = hmm_viterbi(emit, torch.tensor([2]), pg)[0]
+    assert [g.state_unit[s] for s in path] == [1, 0]
+    ll = hmm_forward(emit, torch.tensor([2]), pg)
+    torch.testing.assert_close(
+        ll[0], torch.tensor(math.log(0.025 + 0.225), dtype=torch.float64)
+    )
