@@ -494,6 +494,25 @@ if [ "${task}" == "lid" ] || [ "${task}" == "all" ]; then
     cd "${cwd}"
 fi
 
+if [ "${task}" == "align" ] || [ "${task}" == "all" ]; then
+    # [ESPnet2] test align1 recipe: train the HMM aligner, then write the CTMs
+    cd ./egs2/mini_an4/align1
+    gen_dummy_coverage
+    echo "==== [ESPnet2] ALIGN ==="
+    ./run.sh --ngpu 0 --stage 1 --stop_stage 5 --python "${python}"
+    ./run.sh --ngpu 0 --stage 6 --stop_stage 8 --python "${python}" \
+        --align_exp exp/align_debug --align_args "--num_workers 0"
+    _dir=exp/align_debug/align_model_valid.loss_hmm.ave/test
+    for f in units words words_fwdctc words_bwdctc words_refined; do
+        [ -s "${_dir}/${f}.ctm" ]
+    done
+    # a 2-iteration model need not put any pause on the path
+    [ -f "${_dir}/pauses.ctm" ]
+    # Remove generated files in order to reduce the disk usage
+    rm -rf exp dump data
+    cd "${cwd}"
+fi
+
 if [ "${task}" == "diar" ] || [ "${task}" == "all" ]; then
     # [ESPnet2] test diar1 recipe: two-speaker mixtures simulated from mini_an4
     cd ./egs2/mini_an4/diar1
