@@ -184,6 +184,8 @@ class AlignTask(AbsTask):
         )
 
         model_class = model_choices.get_class(getattr(args, "model", "espnet"))
+        model_conf = dict(args.model_conf)
+        model_conf.setdefault("token_type", args.token_type)
         model = model_class(
             vocab_size=vocab_size,
             token_list=token_list,
@@ -191,7 +193,7 @@ class AlignTask(AbsTask):
             specaug=specaug,
             normalize=normalize,
             encoder=encoder,
-            **args.model_conf,
+            **model_conf,
         )
         if args.init is not None:
             initialize(model, args.init)

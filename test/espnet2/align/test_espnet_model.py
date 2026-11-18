@@ -6,6 +6,21 @@ from espnet2.tasks.align import AlignTask
 TOKENS = ["<blank>", "<unk>", "<space>", "a", "b", "c"]
 
 
+def _plain(tokens, **conf):
+    from espnet2.align.espnet_model import ESPnetAlignModel
+    from espnet2.asr.encoder.transformer_encoder import TransformerEncoder
+
+    enc = TransformerEncoder(
+        4,
+        output_size=8,
+        attention_heads=2,
+        num_blocks=1,
+        linear_units=8,
+        input_layer="linear",
+    )
+    return ESPnetAlignModel(len(tokens), tokens, None, None, None, enc, **conf)
+
+
 def _build(**model_conf):
     parser = AlignTask.get_parser()
     args = parser.parse_args(["--token_list", "x", "--output_dir", "out"])
@@ -79,3 +94,35 @@ def test_segments_put_optional_pause_between_words():
         (pause,),
     ]
     assert [s.skippable for s in segs] == [True, False, False, True, False, True]
+
+
+def test_word_tokens_each_make_a_word():
+    model = _plain(["<blank>", "<unk>", "HELLO", "WORLD"], token_type="word")
+    assert model.words([2, 3]) == [[2], [3]]
+    pause = model.pause_ids[0]
+    # a pause slot between the two words (no <space> token in word mode)
+    assert [s.units for s in model.segments([2, 3])] == [
+        (pause,),
+        (2,),
+        (pause,),
+        (3,),
+        (pause,),
+    ]
+
+
+def test_bpe_word_marker_starts_a_word():
+    tokens = ["<blank>", "<unk>", "\u2581he", "llo", "\u2581wor", "ld"]
+    model = _plain(tokens, token_type="bpe")
+    assert model.words([2, 3, 4, 5]) == [[2, 3], [4, 5]]
+    assert model.word_positions([2, 3, 4, 5]) == [[0, 1], [2, 3]]
+
+
+def test_char_words_split_at_space():
+    model = _plain(TOKENS, token_type="char")
+    assert model.words([3, 4, 2, 5]) == [[3, 4], [5]]
+    assert model.word_positions([3, 4, 2, 5]) == [[0, 1], [3]]
+
+
+def test_token_type_without_word_boundaries_is_rejected():
+    with pytest.raises(ValueError, match="phn"):
+        _plain(TOKENS, token_type="phn")

@@ -49,6 +49,11 @@ class ESPnetAlignModel(AbsESPnetModel):
             words and at the edges (Kaldi's silence probability, 0.5).
         pause_loop_prob: self-loop probability of pause states (defaults to
             ``loop_prob``).
+        token_type: how the transcript was tokenized, which sets where words
+            begin: "char" (words are separated by ``word_boundary``), "word"
+            (every token is a word) or "bpe" (a piece starting with the
+            SentencePiece word marker "\u2581" begins a word). Other types
+            carry no word boundaries and are rejected.
         word_boundary: token that separates words in the text (char token_type
             writes a space as ``<space>``).
         boundary_is_unit: the word-boundary token is itself an HMM unit,
@@ -78,6 +83,7 @@ class ESPnetAlignModel(AbsESPnetModel):
         pause_num_states: int = 1,
         pause_prob: float = 0.5,
         pause_loop_prob: Optional[float] = None,
+        token_type: str = "char",
         word_boundary: str = "<space>",
         boundary_is_unit: bool = True,
         edge_pause: bool = True,
@@ -106,6 +112,12 @@ class ESPnetAlignModel(AbsESPnetModel):
         self.pause_prob = pause_prob
         self.pause_loop_prob = loop_prob if pause_loop_prob is None else pause_loop_prob
         self.max_states = max(num_states, self.pause_num_states)
+        if token_type not in ("char", "word", "bpe"):
+            raise ValueError(
+                f"token_type {token_type!r} is not supported: the aligner needs "
+                "word boundaries, given by char (<space>), word or bpe tokens"
+            )
+        self.token_type = token_type
         self.boundary_id = (
             self.token_list.index(word_boundary)
             if word_boundary in self.token_list
@@ -156,19 +168,39 @@ class ESPnetAlignModel(AbsESPnetModel):
             return self.pause_units[unit - self.vocab_size]
         return self.token_list[unit]
 
+    def word_positions(self, token_ids: Sequence[int]) -> List[List[int]]:
+        """The transcript's words, as lists of positions in ``token_ids``.
+
+        Word-boundary tokens are not part of any word.
+        """
+        words: List[List[int]] = []
+        for i, t in enumerate(token_ids):
+            t = int(t)
+            if t == self.boundary_id:
+                if words and words[-1]:
+                    words.append([])
+                continue
+            if self.token_type == "word":
+                starts = True
+            elif self.token_type == "bpe":
+                starts = self.token_list[t].startswith("\u2581")
+            else:
+                starts = False
+            if not words or (starts and words[-1]):
+                words.append([])
+            words[-1].append(i)
+        return [w for w in words if w]
+
+    def words(self, token_ids: Sequence[int]) -> List[List[int]]:
+        """The transcript's words as lists of unit (token) ids."""
+        return [[int(token_ids[i]) for i in w] for w in self.word_positions(token_ids)]
+
     def segments(self, token_ids: Sequence[int]) -> List[Segment]:
-        """Segments of a transcript: one per character, a pause slot between words."""
+        """Segments of a transcript: one per unit, a pause slot between words."""
         between = tuple(self.pause_ids)
         if self.boundary_is_unit:
             between = (self.boundary_id,) + between
-        words: List[List[int]] = [[]]
-        for t in token_ids:
-            if t == self.boundary_id:
-                if words[-1]:
-                    words.append([])
-            else:
-                words[-1].append(int(t))
-        words = [w for w in words if w]
+        words = self.words(token_ids)
         segs: List[Segment] = []
         if self.edge_pause and self.pause_ids:
             segs.append(Segment(tuple(self.pause_ids), True, self.pause_prob))

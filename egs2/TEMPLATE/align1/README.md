@@ -25,6 +25,17 @@ pause level.
   (use `input_layer: conv2d1` for 10 ms frames), or the feature rate when the
   model upsamples a subsampled encoder (`upsample: repeat|deconv`).
 
+## Token types
+
+The aligner needs word boundaries in the transcript:
+
+- `char` (what this template builds): words are separated by `<space>`.
+- `word`: every token is a word.
+- `bpe`: a SentencePiece piece starting with the word marker `▁` begins a word.
+
+Token types without word boundaries (e.g. `phn`) are rejected when the model
+is built.
+
 ## Recipe flow
 
 1. Data preparation (`local/data.sh`): Kaldi-style data directories with
@@ -35,7 +46,9 @@ pause level.
    with spaces written as `<space>`).
 5. Collect statistics for global mean-variance normalisation.
 6. Training (`espnet2/bin/align_train.py`).
-7. Alignment (`espnet2/bin/align_inference.py`): per data set, CTM files of
+7. Alignment (`espnet2/bin/align_inference.py`) with the averaged model of the
+   first `best_model_criterion` of the training config (or `--inference_model`):
+   per data set, CTM files of
    - `units` (every unit on the path),
    - `words`,
    - `pauses`,

@@ -37,31 +37,22 @@ Span = Tuple[str, int, int]
 
 def words_and_pauses(
     spans: Sequence[Span],
-    tokens: Sequence[str],
+    word_lengths: Sequence[int],
     boundary: str,
     pause_units: Sequence[str],
 ) -> Tuple[List[Span], List[Span]]:
     """Group unit spans into the transcript's words, and list the pauses.
 
     The word-boundary unit is skippable, so words are taken from the
-    transcript: the character units on the path are consumed in order, as
-    many per word as the word has characters.
+    transcript: the units on the path other than the boundary and pause units
+    are consumed in order, ``word_lengths[i]`` of them for word i.
     """
-    word_lens: List[int] = []
-    n = 0
-    for tok in list(tokens) + [boundary]:
-        if tok == boundary:
-            if n:
-                word_lens.append(n)
-            n = 0
-        else:
-            n += 1
-    chars = [x for x in spans if x[0] != boundary and x[0] not in pause_units]
+    units = [x for x in spans if x[0] != boundary and x[0] not in pause_units]
     pauses = [x for x in spans if x[0] in pause_units]
     words: List[Span] = []
     i = 0
-    for n in word_lens:
-        group = chars[i : i + n]
+    for n in word_lengths:
+        group = units[i : i + n]
         i += n
         if not group:
             break
@@ -155,14 +146,15 @@ def inference(
                     logging.warning(f"{key}: no alignment (audio too short)")
                     continue
                 tokens = [model.token_list[i] for i in ids[:n]]
+                positions = model.word_positions(ids[:n])
                 words, pauses = words_and_pauses(
-                    spans, tokens, boundary, model.pause_units
+                    spans, [len(p) for p in positions], boundary, model.pause_units
                 )
                 write("units", key, spans)
                 write("words", key, words)
                 write("pauses", key, pauses)
-                wf = ctc_words(tokens, fwd, boundary) if fwd else None
-                wb = ctc_words(tokens, bwd, boundary) if bwd else None
+                wf = ctc_words(tokens, fwd, positions) if fwd else None
+                wb = ctc_words(tokens, bwd, positions) if bwd else None
                 if wf:
                     write("words_fwdctc", key, wf)
                 if wb:
@@ -174,29 +166,19 @@ def inference(
 
 
 def ctc_words(
-    tokens: Sequence[str], spans: Sequence[Tuple[int, int]], boundary: str
+    tokens: Sequence[str],
+    spans: Sequence[Tuple[int, int]],
+    word_positions: Sequence[Sequence[int]],
 ) -> List[Span]:
     """Words from per-token CTC spans.
 
-    A word spans from the first frame of its first character to the end
-    frame of its last character.
+    A word spans from the first frame of its first token to the end frame of
+    its last token; ``word_positions`` lists each word's token positions.
     """
-    words: List[Span] = []
-    cur = None
-    for tok, (s, e) in zip(tokens, spans):
-        if tok == boundary:
-            if cur is not None:
-                words.append(tuple(cur))
-                cur = None
-            continue
-        if cur is None:
-            cur = [tok, s, e]
-        else:
-            cur[0] += tok
-            cur[2] = e
-    if cur is not None:
-        words.append(tuple(cur))
-    return words
+    return [
+        ("".join(tokens[i] for i in pos), spans[pos[0]][0], spans[pos[-1]][1])
+        for pos in word_positions
+    ]
 
 
 def refine(
