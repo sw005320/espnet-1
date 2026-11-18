@@ -20,13 +20,20 @@ Usage:
 
 import argparse
 import re
-import statistics
 import zipfile
 from collections import defaultdict
 from pathlib import Path
 
+import humanfriendly
+
+from espnet2.align.scoring import (
+    boundary_errors,
+    common_utterances,
+    deter_table,
+    summarize,
+)
+
 MFA_SILENCE = {"", "sil", "sp", "spn", "<eps>"}
-STEP = 0.01
 
 
 def read_textgrid_words(text: str):
@@ -68,23 +75,17 @@ def read_ctm(path: Path):
     return out
 
 
-def rule_labels(words, min_pause: float, end_pad: float):
-    """Speech runs of a word list under the labelling rule."""
-    runs = []
-    for s, e, _ in words:
-        if runs and s - runs[-1][1] < min_pause:
-            runs[-1][1] = max(runs[-1][1], e)
-        else:
-            runs.append([s, e])
-    return [(s, e + end_pad) for s, e in runs]
-
-
-def frames(runs, n):
-    v = [False] * n
-    for s, e in runs:
-        for i in range(max(0, int(round(s / STEP))), min(n, int(round(e / STEP)))):
-            v[i] = True
-    return v
+def read_durations(utt2dur=None, utt2num_samples=None, fs="16k"):
+    """Utterance durations in seconds, from utt2dur or utt2num_samples."""
+    if utt2dur is not None:
+        return {k: float(v) for k, v in (ln.split()[:2] for ln in utt2dur.open())}
+    if utt2num_samples is not None:
+        rate = humanfriendly.parse_size(fs)
+        return {
+            k: int(v) / rate
+            for k, v in (ln.split()[:2] for ln in utt2num_samples.open())
+        }
+    raise SystemExit("give --utt2dur or --utt2num_samples (with --fs)")
 
 
 def main():
@@ -92,6 +93,8 @@ def main():
     ap.add_argument("--mfa_zip", type=Path, required=True)
     ap.add_argument("--words_ctm", type=Path, required=True)
     ap.add_argument("--utt2dur", type=Path, help="utterance durations (seconds)")
+    ap.add_argument("--utt2num_samples", type=Path, help="utterance lengths (samples)")
+    ap.add_argument("--fs", default="16k", help="sampling rate of utt2num_samples")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--min_pauses", default="0.2,0.3,0.5")
     ap.add_argument("--end_pads", default="0,0.05,0.1,0.2,0.3")
@@ -99,60 +102,36 @@ def main():
 
     hyp = read_ctm(a.words_ctm)
     ref = read_mfa(a.mfa_zip, set(hyp))
-    durs = {}
-    if a.utt2dur:
-        durs = {k: float(v) for k, v in (line.split()[:2] for line in a.utt2dur.open())}
-    common = sorted(u for u in hyp if u in ref and ref[u])
+    durs = read_durations(a.utt2dur, a.utt2num_samples, a.fs)
+    try:
+        utts = common_utterances(hyp, ref, durs)
+    except ValueError as e:
+        raise SystemExit(f"{a.words_ctm}: {e}")
     a.out.mkdir(parents=True, exist_ok=True)
 
-    ds, de, mismatched = [], [], 0
-    for u in common:
-        h, r = hyp[u], ref[u]
-        if len(h) != len(r):
-            mismatched += 1
-            continue
-        for (hs, he, _), (rs, re_, _) in zip(h, r):
-            ds.append(abs(hs - rs))
-            de.append(abs(he - re_))
-
-    def summ(xs):
-        xs = sorted(xs)
-        return (
-            f"mean {1000 * statistics.mean(xs):.1f} ms, median "
-            f"{1000 * statistics.median(xs):.1f} ms, p90 "
-            f"{1000 * xs[int(0.9 * (len(xs) - 1))]:.1f} ms, <=20 ms "
-            f"{100 * sum(x <= 0.02 for x in xs) / len(xs):.1f} %, <=50 ms "
-            f"{100 * sum(x <= 0.05 for x in xs) / len(xs):.1f} %"
-        )
-
+    ds, de, mismatched = boundary_errors(hyp, ref, utts)
     lines = [
-        f"utterances scored: {len(common)} (word-count mismatch skipped: "
+        f"utterances scored: {len(utts)} (word-count mismatch skipped: "
         f"{mismatched}); words: {len(ds)}",
-        f"word start error: {summ(ds)}" if ds else "word start error: n/a",
-        f"word end error:   {summ(de)}" if de else "word end error: n/a",
+        f"word start error: {summarize(ds)}" if ds else "word start error: n/a",
+        f"word end error:   {summarize(de)}" if de else "word end error: n/a",
         "",
-        "label-rule DetER % (miss / FA), start pad 0",
+        "label-rule DetER % (miss / FA), start pad 0, scored within the audio",
         "min_pause end_pad DetER miss FA",
     ]
-    for mp in (float(x) for x in a.min_pauses.split(",")):
-        for ep in (float(x) for x in a.end_pads.split(",")):
-            miss = fa = speech = 0
-            for u in common:
-                end = max(
-                    durs.get(u, 0.0),
-                    max(e for _, e, _ in ref[u]),
-                    max(e for _, e, _ in hyp[u]) + ep,
-                )
-                n = int(round(end / STEP)) + 1
-                rv = frames([(s, e) for s, e, _ in ref[u]], n)
-                hv = frames(rule_labels(hyp[u], mp, ep), n)
-                speech += sum(rv)
-                miss += sum(r and not h for r, h in zip(rv, hv))
-                fa += sum(h and not r for r, h in zip(rv, hv))
-            lines.append(
-                f"{mp:.2f} {ep:.2f} {100 * (miss + fa) / speech:.2f} "
-                f"{100 * miss / speech:.2f} {100 * fa / speech:.2f}"
-            )
+    rows = deter_table(
+        hyp,
+        ref,
+        durs,
+        utts,
+        [float(x) for x in a.min_pauses.split(",")],
+        [float(x) for x in a.end_pads.split(",")],
+    )
+    for mp, ep, d, m, f in rows:
+        if d is None:
+            lines.append(f"{mp:.2f} {ep:.2f} n/a (no reference speech)")
+        else:
+            lines.append(f"{mp:.2f} {ep:.2f} {d:.2f} {m:.2f} {f:.2f}")
     text = "\n".join(lines) + "\n"
     (a.out / "boundaries.txt").write_text(text)
     print(text, end="")

@@ -20,9 +20,13 @@ if [ -z "${LIBRISPEECH_MFA:-}" ]; then
     exit 0
 fi
 
-opts=
 if [ -f "${data_dir}/utt2dur" ]; then
     opts="--utt2dur ${data_dir}/utt2dur"
+elif [ -f "${data_dir}/utt2num_samples" ]; then
+    opts="--utt2num_samples ${data_dir}/utt2num_samples --fs 16k"
+else
+    echo "$0: ${data_dir} has neither utt2dur nor utt2num_samples"
+    exit 1
 fi
 python3 local/score_boundaries.py \
     --mfa_zip "${LIBRISPEECH_MFA}" \
