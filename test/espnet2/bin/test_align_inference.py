@@ -39,3 +39,10 @@ def test_ctc_words_and_refine():
     # start: mean of the HMM start and the reversed-CTC word start;
     # end: mean of the HMM end and the forward-CTC word end (rounded)
     assert refine(hmm, fwd, bwd) == [("ab", 2, 8), ("c", 8, 10)]
+
+
+def test_refine_separates_overlapping_neighbors():
+    hmm = [("a", 2, 5), ("b", 5, 6), ("c", 6, 10)]
+    fwd = [("a", 4, 8), ("b", 8, 9), ("c", 9, 10)]
+    bwd = [("a", 0, 1), ("b", 1, 2), ("c", 2, 3)]
+    assert refine(hmm, fwd, bwd) == [("a", 1, 5), ("b", 5, 6), ("c", 6, 10)]

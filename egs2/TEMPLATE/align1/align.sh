@@ -231,6 +231,7 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
             "data/${dset}/wav.scp" "${data_feats}${_suf}/${dset}"
         echo raw > "${data_feats}${_suf}/${dset}/feats_type"
         echo "${audio_format}" > "${data_feats}${_suf}/${dset}/audio_format"
+        echo "${fs}" > "${data_feats}${_suf}/${dset}/sample_rate"
     done
 fi
 
@@ -242,6 +243,9 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
     for dset in "${train_set}" "${valid_set}"; do
         utils/copy_data_dir.sh --validate_opts --non-print "${data_feats}/org/${dset}" "${data_feats}/${dset}"
         cp "${data_feats}/org/${dset}/feats_type" "${data_feats}/org/${dset}/audio_format" "${data_feats}/${dset}/"
+        if [ -f "${data_feats}/org/${dset}/sample_rate" ]; then
+            cp "${data_feats}/org/${dset}/sample_rate" "${data_feats}/${dset}/"
+        fi
         <"${data_feats}/org/${dset}/utt2num_samples" \
             awk -v min_length="${_min_length}" -v max_length="${_max_length}" \
                 '{ if ($2 > min_length && $2 < max_length ) print $0; }' \
@@ -472,7 +476,8 @@ if [ ${stage} -le 8 ] && [ ${stop_stage} -ge 8 ]; then
     log "Stage 8: Scoring"
     if [ -x local/score.sh ]; then
         for dset in ${test_sets}; do
-            local/score.sh "${align_exp}/${align_out_tag}/${dset}" "${data_feats}/${dset}"
+            ALIGN_SAMPLE_RATE="${fs}" local/score.sh \
+                "${align_exp}/${align_out_tag}/${dset}" "${data_feats}/${dset}"
         done
     else
         log "local/score.sh does not exist; skip scoring"

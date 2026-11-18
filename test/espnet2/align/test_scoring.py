@@ -1,3 +1,9 @@
+import os
+import subprocess
+import sys
+from pathlib import Path
+from zipfile import ZipFile
+
 import pytest
 
 from espnet2.align.scoring import (
@@ -60,3 +66,30 @@ def test_boundary_errors_skip_word_count_mismatch():
     assert skipped == 1
     assert [round(x, 3) for x in ds] == [0.1, 0.0]
     assert [round(x, 3) for x in de] == [0.0, 0.2]
+
+
+@pytest.mark.parametrize("recorded_rate", [True, False])
+def test_librispeech_scores_8khz_audio(tmp_path, monkeypatch, recorded_rate):
+    repo = Path(__file__).resolve().parents[3]
+    scorer = repo / "egs2/librispeech_100/align1/local"
+    (tmp_path / "local").symlink_to(scorer, target_is_directory=True)
+    (tmp_path / "db.sh").write_text("LIBRISPEECH_MFA=ref.zip\n")
+    (tmp_path / "utt2num_samples").write_text("u 8000\n")
+    (tmp_path / "words.ctm").write_text("u 1 0.000 0.250 HELLO\n")
+    with ZipFile(tmp_path / "ref.zip", "w") as ref:
+        ref.writestr(
+            "u.TextGrid",
+            '\nitem [1]:\nname = "words"\n'
+            'xmin = 0.0\nxmax = 0.25\ntext = "HELLO"\n'
+            'xmin = 0.75\nxmax = 1.0\ntext = "WORLD"\n',
+        )
+    if recorded_rate:
+        (tmp_path / "sample_rate").write_text("8k\n")
+    monkeypatch.setenv("ALIGN_SAMPLE_RATE", "16k" if recorded_rate else "8k")
+    monkeypatch.setenv("PATH", str(Path(sys.executable).parent), prepend=os.pathsep)
+    monkeypatch.setenv("PYTHONPATH", str(repo), prepend=os.pathsep)
+    subprocess.run(["bash", "local/score.sh", ".", "."], cwd=tmp_path, check=True)
+
+    # At 8 kHz this is a full second, so the missing second word counts.
+    result = (tmp_path / "score/boundaries.txt").read_text()
+    assert "0.20 0.00 50.00 50.00 0.00" in result.splitlines()

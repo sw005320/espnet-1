@@ -191,8 +191,9 @@ def refine(
     A forward CTC head emits a token in the late part of its frames and a
     time-reversed head in the early part. The start is therefore averaged
     with the word start on the time-reversed path, and the end with the word
-    end on the forward path. A word is left as it is when the word counts
-    differ.
+    end on the forward path. A CTC path with a different word count is ignored.
+    Overlapping neighbors are separated within the overlap, as close as
+    possible to the preceding HMM word's end.
     """
     out = []
     for i, (name, s, e) in enumerate(words):
@@ -201,7 +202,15 @@ def refine(
             ns = round((s + bwd[i][1]) / 2)
         if fwd is not None and len(fwd) == len(words):
             ne = round((e + fwd[i][2]) / 2)
-        out.append((name, ns, max(ne, ns + 1)))
+        # Keep at least one frame from the original word so that an HMM
+        # boundary can separate neighbors without collapsing either span.
+        ns = min(ns, e - 1)
+        ne = max(ne, s + 1, ns + 1)
+        if out and out[-1][2] > ns:
+            prev_name, prev_start, prev_end = out[-1]
+            ns = max(ns, min(prev_end, words[i - 1][2]))
+            out[-1] = (prev_name, prev_start, ns)
+        out.append((name, ns, ne))
     return out
 
 

@@ -508,6 +508,13 @@ if [ "${task}" == "align" ] || [ "${task}" == "all" ]; then
     done
     # a 2-iteration model need not put any pause on the path
     [ -f "${_dir}/pauses.ctm" ]
+    awk '
+        $4 <= 0 || ($1 == utt && $3 < end - 1e-6) {
+            print "Invalid or overlapping refined word span: " $0 > "/dev/stderr"
+            exit 1
+        }
+        { utt = $1; end = $3 + $4 }
+    ' "${_dir}/words_refined.ctm"
     # Remove generated files in order to reduce the disk usage
     rm -rf exp dump data
     cd "${cwd}"
