@@ -28,7 +28,8 @@ def ctc_viterbi(
     for t in tokens:
         ext += [int(t), blank]
     S = len(ext)
-    lp = log_probs[:, ext].float()  # (T, S)
+    # the dynamic programme runs frame by frame, on CPU whatever the input device
+    lp = log_probs.detach()[:, ext].float().cpu()  # (T, S)
     neg = torch.tensor(float("-inf"))
     # transitions into s: from s, s-1, and s-2 when ext[s] is a token that
     # differs from ext[s-2]

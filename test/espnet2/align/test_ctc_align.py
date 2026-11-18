@@ -1,5 +1,6 @@
 import itertools
 
+import pytest
 import torch
 
 from espnet2.align.ctc_align import ctc_viterbi
@@ -55,3 +56,21 @@ def test_matches_brute_force():
 def test_repeated_token_needs_blank():
     lp = torch.randn(2, 3).log_softmax(-1)
     assert ctc_viterbi(lp, [1, 1]) == []  # "1 _ 1" needs 3 frames
+
+
+def _accelerators():
+    devs = []
+    if torch.cuda.is_available():
+        devs.append("cuda")
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        devs.append("mps")
+    return devs
+
+
+@pytest.mark.parametrize("device", ["cpu"] + _accelerators())
+def test_input_on_any_device(device):
+    torch.manual_seed(3)
+    lp = torch.randn(6, 3).log_softmax(-1)
+    ref = ctc_viterbi(lp, [1, 2])
+    assert ctc_viterbi(lp.to(device), [1, 2]) == ref
+    assert ref and all(isinstance(x, int) for span in ref for x in span)
