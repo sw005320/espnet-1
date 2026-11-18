@@ -1,0 +1,1 @@
+../../TEMPLATE/align1/path.sh

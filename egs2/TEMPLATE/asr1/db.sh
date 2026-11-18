@@ -67,6 +67,7 @@ HUB4_SPANISH=
 LABOROTV=
 TEDXJP=
 LIBRISPEECH=downloads
+LIBRISPEECH_MFA=  # zip of LibriSpeech MFA word alignments (<utt>.TextGrid)
 LIBRILIGHT_LIMITED=
 LIBRILIGHT=downloads
 FSC=

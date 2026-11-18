@@ -1,0 +1,41 @@
+# Tiny HMM aligner for CI: 2-state character HMM, optional <sil>, full-sum
+# loss from a flat start, with forward/backward CTC heads.
+encoder: e_branchformer
+encoder_conf:
+    output_size: 32
+    attention_heads: 2
+    attention_layer_type: rel_selfattn
+    pos_enc_layer_type: rel_pos
+    rel_pos_type: latest
+    cgmlp_linear_units: 64
+    cgmlp_conv_kernel: 7
+    use_linear_after_conv: false
+    gate_activation: identity
+    num_blocks: 2
+    input_layer: conv2d1
+    linear_units: 64
+    positionwise_layer_type: linear
+    macaron_ffn: true
+    merge_conv_kernel: 7
+
+frontend_conf:
+    n_fft: 512
+    win_length: 400
+    hop_length: 160
+
+model_conf:
+    num_states: 2
+    pause_units: ["<sil>"]
+    pause_num_states: 1
+    pause_prob: 0.5
+    boundary_is_unit: true
+    fwd_ctc_weight: 0.3
+    bwd_ctc_weight: 0.3
+
+optim: adam
+optim_conf:
+    lr: 0.002
+batch_type: folded
+batch_size: 2
+max_epoch: 1
+num_iters_per_epoch: 2
