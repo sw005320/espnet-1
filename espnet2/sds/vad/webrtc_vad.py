@@ -31,7 +31,10 @@ class WebrtcFrameVAD(AbsFrameVAD):
                 Defaults to 20.
         """
         if not is_webrtcvad_available:
-            raise ImportError("Error: webrtcvad is not properly installed.")
+            raise ImportError(
+                "WebrtcVADModel needs webrtcvad: pip install 'espnet[sds]' "
+                "(or only its prebuilt wheels, pip install webrtcvad-wheels)"
+            )
         if frame_ms not in (10, 20, 30):
             raise ValueError(f"frame_ms must be 10, 20 or 30, not {frame_ms}")
         self.mode = mode

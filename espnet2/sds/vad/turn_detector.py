@@ -148,6 +148,12 @@ class TurnDetector(AbsVAD):
         The endpoint is the start of the first silent frame. The turn is
         returned once the last of its hangover_frames silent frames, the
         (hangover_frames - 1)-th after it, has its decision.
+
+        Not included: compute time, and the audio a frame VAD's stream
+        resampler holds back when the input is not at the rate the VAD runs
+        at. frontia-vad runs at 16 kHz and WebRTC at 8/16/32/48 kHz; for other
+        input soxr holds back, measured with 20 ms to 0.5 s chunks, about
+        20-35 ms at 48 kHz and up to about 115 ms at 8 kHz.
         """
         return (
             self.algorithmic_delay_s

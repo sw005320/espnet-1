@@ -140,3 +140,11 @@ def test_new_controls_are_keyword_only(monkeypatch):
     with pytest.raises(TypeError):
         WebrtcVADModel(None, None, 500.0, None, 16000, 2)
     assert WebrtcVADModel(mode=2, median=3).median == 3
+
+
+def test_missing_webrtcvad_names_the_extra(monkeypatch):
+    from espnet2.sds.vad import webrtc_vad
+
+    monkeypatch.setattr(webrtc_vad, "is_webrtcvad_available", False)
+    with pytest.raises(ImportError, match=r"espnet\[sds\]"):
+        WebrtcVADModel()
