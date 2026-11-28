@@ -8,7 +8,8 @@ Each manifest line: corpus_dir, relative_path, url, size_bytes, checksum
 into the corpus directory, "untar_strip1": the same without the archive's top
 directory). A file that already has the listed size (and checksum) is kept,
 so a rerun only fetches what is missing. Downloads resume (wget -c). A line
-without a size takes the server's Content-Length (HEAD request) as the size;
+without a size takes the size the server reports (a ranged GET of the first
+byte, else the Content-Length of a HEAD request) as the size;
 when the server gives none, the file counts only after wget succeeds. An empty
 file is always BAD, and a downloaded .zip must pass a CRC test of every member.
 Every file is reported as OK or BAD; the exit status is 1 if any file is BAD. The
@@ -51,8 +52,37 @@ def complete(dest: Path, size: str) -> bool:
     return bool(size) and dest.exists() and dest.stat().st_size == int(size)
 
 
+def ranged_size(url: str) -> str:
+    """The total size from a GET of the first byte, or "" if the server gives none.
+
+    Some hosts (acast podcast feeds) answer HEAD with the size of a stub body, so
+    the size comes from a real GET; the response is closed after its headers.
+    """
+    import urllib.request
+
+    req = urllib.request.Request(
+        url, headers={"User-Agent": USER_AGENT, "Range": "bytes=0-0"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            if r.status == 206:
+                total = (r.headers.get("Content-Range") or "").rpartition("/")[2]
+            else:
+                total = r.headers.get("Content-Length") or ""
+    except (OSError, ValueError):
+        return ""
+    return total if total.isdigit() and int(total) > 0 else ""
+
+
 def served_size(url: str) -> str:
-    """The Content-Length of the final response to a HEAD request, or "" if none."""
+    """The file size the server reports, or "" if none.
+
+    A ranged GET first; the Content-Length of the final response to a HEAD
+    request only if that gives nothing.
+    """
+    size = ranged_size(url)
+    if size:
+        return size
     r = subprocess.run(
         ["curl", "-sIL", "--max-time", "120", "-A", USER_AGENT, url],
         capture_output=True,
