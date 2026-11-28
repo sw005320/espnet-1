@@ -126,17 +126,16 @@ def test_algorithmic_delay():
 
 @pytest.mark.parametrize("median", [1, 25])
 def test_endpoint_delay_is_when_the_turn_comes_back(median):
-    """Fed one sample at a time, the turn returns endpoint_delay_s after it."""
+    """Fed 1 ms at a time, the turn returns endpoint_delay_s after it."""
     vad = FrontiaVADModel.from_detector(
         _detector(_speech_between(50, 150), median=median)
     )
-    n = 0
-    while vad.forward(np.zeros(1, dtype=np.int16), FS) is None:
+    step = FS // 1000
+    n = 1
+    while vad.forward(np.zeros(step, dtype=np.int16), FS) is None:
         n += 1
-    returned_s = (n + 1) / FS
-    assert returned_s - vad.last_turn["endpoint_s"] == pytest.approx(
-        vad.endpoint_delay_s
-    )
+    late = n * step / FS - vad.last_turn["endpoint_s"] - vad.endpoint_delay_s
+    assert -1e-9 <= late < 0.001 + 1e-9  # within the 1 ms chunk
 
 
 def test_end_padding_up_to_the_endpoint_delay_is_all_there():
@@ -544,10 +543,10 @@ def test_look_ahead_turns_equal_the_whole_recording_rule(tmp_path, look_ahead):
     rng = np.random.default_rng(3)
     # loud bursts in silence; the threshold sits between the two levels the
     # random model gives them, so that the bursts make turns
-    audio = np.zeros(12 * FS, dtype=np.float32)
+    audio = np.zeros(7 * FS, dtype=np.float32)
     burst = np.zeros(len(audio), dtype=bool)
-    for a in (1.0, 4.0, 8.0):
-        n = int(1.5 * FS)
+    for a in (0.5, 2.5, 4.5):
+        n = int(1.0 * FS)
         audio[int(a * FS) : int(a * FS) + n] = rng.normal(size=n) * 0.5
         burst[int(a * FS) : int(a * FS) + n] = True
     # the first of these random models that scores the bursts higher

@@ -414,7 +414,9 @@ def test_stream_memory_over_ten_minutes(tmp_path, keep):
 
 
 @pytest.mark.parametrize("look_ahead", [1, 3, 6])
-@pytest.mark.parametrize("chunk", [1, 128, 777, 8000])
+# 37 samples: shorter than a hop, so frames complete across chunks; one
+# sample at a time reruns the encoder 32000 times, over CI's 10 s per test
+@pytest.mark.parametrize("chunk", [37, 128, 777, 8000])
 def test_a_stream_that_reads_ahead_equals_the_whole_recording(
     tmp_path, look_ahead, chunk
 ):
