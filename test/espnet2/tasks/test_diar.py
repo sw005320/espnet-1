@@ -87,6 +87,45 @@ def test_build_model_with_wav_augment(tmp_path):
     assert not (tmp_path / "noise.scp").exists()
 
 
+def test_a_config_saved_with_batch_noise_still_loads(tmp_path):
+    """Configs from before the batch_wav rename keep loading for inference.
+
+    espnet/frontia_vad_v1_offline was trained with --wav_augment batch_noise and
+    the noise arguments below; its noise list does not exist where the model
+    is loaded.
+    """
+    import yaml
+
+    from espnet2.layers.batch_wav_augment import BatchWavAugment
+
+    DiarizationTask.main(
+        cmd=[
+            "--dry_run",
+            "true",
+            "--output_dir",
+            str(tmp_path),
+            "--num_spk",
+            "1",
+            "--encoder",
+            "transformer",
+            "--encoder_conf",
+            "num_blocks=1",
+        ]
+    )
+    config = yaml.safe_load((tmp_path / "config.yaml").read_text())
+    config["wav_augment"] = "batch_noise"
+    config["wav_augment_conf"] = {
+        "fs": 16000,
+        "noise_apply_prob": 0.8,
+        "noise_db_range": "-5_20",
+        "noise_scp": "data/noise.scp",
+    }
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(config))
+    model, args = DiarizationTask.build_model_from_file(tmp_path / "config.yaml")
+    assert isinstance(model.wav_augment, BatchWavAugment)
+    assert model.wav_augment.noise_apply_prob == 0.8
+
+
 def test_wav_augment_takes_the_frontend_sampling_rate(tmp_path):
     """Without wav_augment_conf fs, the noise is mixed at the frontend's fs."""
     parser = DiarizationTask.get_parser()

@@ -50,7 +50,11 @@ frontend_choices = ClassChoices(
 )
 wav_augment_choices = ClassChoices(
     name="wav_augment",
-    classes=dict(batch_wav=BatchWavAugment),
+    # batch_noise is the name before BatchWavAugment also added reverberation
+    # (f52ae6e). Models trained then, such as espnet/frontia_vad_v1_offline,
+    # store it in their config.yaml, which must keep loading; it builds a
+    # BatchWavAugment with the same noise arguments.
+    classes=dict(batch_wav=BatchWavAugment, batch_noise=BatchWavAugment),
     type_check=torch.nn.Module,
     default=None,
     optional=True,
