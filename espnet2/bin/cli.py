@@ -736,7 +736,14 @@ def build_parser() -> argparse.ArgumentParser:
         # share one parser, so the old name keeps working exactly, and the
         # help listing says "transcribe (asr)" - which is where someone
         # looking for the name they remember will look.
-        p = sub.add_parser(name, aliases=[was] if was else [], help=help_text)
+        # description is what `espnet <name> --help` and the generated docs
+        # print; argparse does not copy it from help.
+        p = sub.add_parser(
+            name,
+            aliases=[was] if was else [],
+            help=help_text,
+            description=help_text,
+        )
         p.add_argument(
             "--model",
             default=DEFAULT_MODELS.get(name),
@@ -917,9 +924,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="also publish a temporary public gradio.live link",
     )
 
-    sub.add_parser(
-        "models", help="show the default model of each command"
-    ).set_defaults(func=cmd_models)
+    models_help = "show the default model of each command"
+    sub.add_parser("models", help=models_help, description=models_help).set_defaults(
+        func=cmd_models
+    )
     return parser
 
 

@@ -128,6 +128,20 @@ class _Recorder:
         return [(0.0, 1.0, first), (1.0, 2.0, rest)]
 
 
+def test_every_subcommand_has_a_description():
+    # doc/argparse2rst.py documents espnet2/bin/diar_inference_streaming.py
+    # from the `detect` subparser and stops on a parser with no description.
+    import argparse
+
+    (action,) = [
+        a
+        for a in cli.build_parser()._actions
+        if isinstance(a, argparse._SubParsersAction)
+    ]
+    missing = [name for name, p in action.choices.items() if not p.description]
+    assert missing == []
+
+
 def test_models_lists_one_default_per_command(capsys):
     assert cli.main(["models"]) == 0
     out = capsys.readouterr().out
