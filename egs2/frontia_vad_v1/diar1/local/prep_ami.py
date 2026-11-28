@@ -5,6 +5,10 @@ Each wav of a meeting (Headset-*, Lapel-*, Array1-0*, Array2-0*, Mix-Headset)
 is its own recording, labelled with the union of all speakers' segments from
 the manual annotations (segments/<meeting>.<speaker>.segments.xml). The
 meeting lists come from the AMI ASR recipe (full-corpus-ASR partition).
+
+Every audio file that local/ami_audio_files.txt lists for the split's meetings
+must be present: preparing data from a copy that is still being downloaded
+would drop channels without notice.
 """
 
 import argparse
@@ -14,6 +18,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from vad_data_utils import (
+    check_expected_files,
     clip_intervals,
     iter_annotation_files,
     merge_intervals,
@@ -49,6 +54,17 @@ def main():
     )
     parser.add_argument("meeting_list", type=Path, help="e.g. split_dev.orig")
     parser.add_argument("out_dir", type=Path)
+    parser.add_argument(
+        "--expected_files",
+        type=Path,
+        default=Path(__file__).resolve().parent / "ami_audio_files.txt",
+        help="audio files of a complete copy, relative to ami_root",
+    )
+    parser.add_argument(
+        "--allow_missing",
+        action="store_true",
+        help="only warn when a file of --expected_files is missing",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     # wav.scp is read from other directories later, so store absolute paths
@@ -56,6 +72,9 @@ def main():
 
     segments = read_segments(args.annotations)
     meetings = args.meeting_list.read_text().split()
+    check_expected_files(
+        args.ami_root, meetings, args.expected_files, args.allow_missing
+    )
     recordings, speech, skipped = {}, {}, []
     for meeting in meetings:
         if meeting not in segments:

@@ -117,6 +117,39 @@ def readable_audio_info(path: Path, skipped: List[str]) -> Optional[Tuple[float,
     return duration, channels
 
 
+def check_expected_files(
+    root: Path, meetings: List[str], listing: Path, allow_missing: bool
+):
+    """Stop if a file that `listing` gives for one of `meetings` is not under `root`.
+
+    `listing` has one path per line, relative to `root` and starting with the
+    meeting (lines starting with # are comments): the audio files of a complete
+    copy of the corpus. A copy that is still being downloaded lacks some of
+    them, and the data prepared from it would silently lose those channels.
+    With `allow_missing`, the missing files are only logged.
+    """
+    wanted = set(meetings)
+    expected = [
+        line.strip()
+        for line in listing.read_text().splitlines()
+        if line.strip() and not line.startswith("#") and line.split("/")[0] in wanted
+    ]
+    missing = [p for p in expected if not (root / p).exists()]
+    if not missing:
+        logging.info(
+            "all %d audio files listed in %s are present", len(expected), listing
+        )
+        return
+    message = (
+        f"{len(missing)} of {len(expected)} audio files listed in {listing} are "
+        f"missing under {root} (an incomplete download?), e.g. "
+        f"{', '.join(missing[:5])}"
+    )
+    if not allow_missing:
+        raise SystemExit(message + "; pass --allow_missing to prepare the data anyway")
+    logging.warning(message)
+
+
 def write_skipped(out_dir: Path, skipped: List[str]):
     """Record the unreadable files of this directory in skipped_audio.txt."""
     out_dir.mkdir(parents=True, exist_ok=True)
