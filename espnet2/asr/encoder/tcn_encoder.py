@@ -100,12 +100,24 @@ class _TCNBlock(torch.nn.Module):
         frame, as the left padding of forward()). Returns the residual and the
         cache for the next call.
         """
-        y = self.norm_in(self.act_in(self.conv_in(x)))  # (N, H, k)
+        # A stream adds a few frames per call, so each convolution here does
+        # little work and conv1d's fixed cost per call dominated (4.3 times the
+        # time of this step on CPU for 2-3 frames). The 1x1 convolutions are
+        # matrix products over channels, and the depthwise convolution is the
+        # weighted sum of its kernel_size taps, gathered for the k new frames.
+        k = x.size(2)
+        y = F.linear(x.transpose(1, 2), self.conv_in.weight[..., 0])  # (N, k, H)
+        y = self.norm_in(self.act_in(y.transpose(1, 2)))  # (N, H, k)
         y = torch.cat([cache, y], dim=2)  # (N, H, (kernel_size - 1) d + k)
-        weight = self.depthwise.weight[..., : self.kernel_size]  # causal taps
-        out = F.conv1d(y, weight, dilation=self.dilation, groups=y.size(1))  # (N, H, k)
+        # Output frame j reads y[..., j + p d] for tap p = 0 .. kernel_size - 1.
+        taps = torch.arange(self.kernel_size, device=y.device) * self.dilation
+        index = taps[:, None] + torch.arange(k, device=y.device)  # (P, k)
+        weight = self.depthwise.weight[:, 0, : self.kernel_size]  # (H, P) causal taps
+        out = torch.einsum("nhpk,hp->nhk", y[..., index], weight)  # (N, H, k)
         cache = y[..., y.size(2) - cache.size(2) :]  # (N, H, (kernel_size - 1) d)
-        return self.conv_out(self.norm_out(self.act_out(out))), cache  # (N, B, k)
+        out = self.norm_out(self.act_out(out))
+        out = F.linear(out.transpose(1, 2), self.conv_out.weight[..., 0])  # (N, k, B)
+        return out.transpose(1, 2), cache  # (N, B, k)
 
 
 class TCNEncoder(AbsLookAheadEncoder):
@@ -377,7 +389,9 @@ class TCNEncoder(AbsLookAheadEncoder):
                 "forward_streaming with BatchNorm needs eval mode: in training "
                 "mode BatchNorm normalizes each chunk with its own statistics"
             )
-        x = self.bottleneck(self.input_norm(xs.transpose(1, 2)))
+        # 1x1 convolutions as matrix products: see _TCNBlock.forward_streaming
+        x = self.input_norm(xs.transpose(1, 2)).transpose(1, 2)  # (B, k, D)
+        x = F.linear(x, self.bottleneck.weight[..., 0]).transpose(1, 2)
         if state is None:
             state = [
                 x.new_zeros(
@@ -392,7 +406,7 @@ class TCNEncoder(AbsLookAheadEncoder):
             residual, cache = block.forward_streaming(x, cache)
             x = x + residual
             new_state.append(cache)
-        out = self.output(self.output_act(x)).transpose(1, 2)
+        out = F.linear(self.output_act(x).transpose(1, 2), self.output.weight[..., 0])
         return out, new_state
 
     def forward(
