@@ -508,6 +508,35 @@ def test_tiny_model_scores_other_rates_as_their_16k_resampling(tmp_path, rate, c
     np.testing.assert_allclose(streamed, whole[: len(streamed)], atol=1e-4)
 
 
+class _ReleasedFrameVAD:
+    """Gives out precomputed frame scores as their audio comes in.
+
+    Frame i is released once window_s seconds from its start are in, as a
+    streaming frame VAD with that window and look-ahead would release it.
+    """
+
+    def __init__(self, probs, frame_shift, window_s):
+        self.all = probs
+        self.frame_shift = frame_shift
+        self.window_s = window_s
+        self.reset()
+
+    def reset(self):
+        self.seconds = 0.0
+        self.emitted = 0
+
+    def warmup(self):
+        self.reset()
+
+    def accept(self, audio, sample_rate):
+        self.seconds += len(audio) / sample_rate
+        ready = int(np.floor((self.seconds - self.window_s) / self.frame_shift + 1e-9))
+        ready = min(len(self.all), max(self.emitted, ready + 1))
+        out = self.all[self.emitted : ready]
+        self.emitted = ready
+        return out
+
+
 def _dual_mode_detector(tmp_path, threshold=0.5, median=1, seed=0):
     import torch
 
@@ -571,7 +600,27 @@ def test_look_ahead_turns_equal_the_whole_recording_rule(tmp_path, look_ahead):
     for i in range(0, len(audio), 160):
         if vad.forward(audio[i : i + 160], FS) is not None:
             turns.append((dict(vad.last_turn), (i + 160) / FS))
-    assert len(turns) == 3
+    # The reference: the whole recording's probabilities, released at the
+    # same times, through the same TurnDetector rule. How many turns a random
+    # model makes depends on the platform's arithmetic; that they are the same
+    # turns does not.
+    from espnet2.sds.vad.turn_detector import TurnDetector
+
+    ref = TurnDetector(
+        _ReleasedFrameVAD(whole, HOP / FS, vad.frame_vad.window_s),
+        threshold=vad.threshold,
+        median=vad.median,
+        min_speech_ms=8.0,
+        hangover_ms=300.0,
+    )
+    ref_turns = []
+    for i in range(0, len(audio), 160):
+        if ref.forward(audio[i : i + 160], FS) is not None:
+            ref_turns.append(
+                (ref.last_turn["speech_start_s"], ref.last_turn["endpoint_s"])
+            )
+    assert len(turns) >= 1
+    assert [(t["speech_start_s"], t["endpoint_s"]) for t, _ in turns] == ref_turns
     for t, returned_s in turns:
         k = int(round(t["probs_start_s"] / (HOP / FS)))
         np.testing.assert_allclose(
