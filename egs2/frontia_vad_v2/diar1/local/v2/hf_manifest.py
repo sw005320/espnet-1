@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write a download manifest (local/v2/downloads/<corpus>.tsv) from a Hugging Face dataset.
+"""Download manifest (local/v2/downloads/<corpus>.tsv) of a Hugging Face dataset.
 
     python3 local/v2/hf_manifest.py <corpus> <repo id> [--include REGEX] \
         [--licences cc-by-4.0,cc0-1.0,...] [--out local/v2/downloads]
@@ -18,7 +18,10 @@ import sys
 import urllib.request
 from pathlib import Path
 
-ACCEPTED = "cc-by-4.0,cc-by-3.0,cc-by-2.0,cc0-1.0,mit,apache-2.0,odc-by,cdla-permissive-1.0,cdla-permissive-2.0"
+ACCEPTED = (
+    "cc-by-4.0,cc-by-3.0,cc-by-2.0,cc0-1.0,mit,apache-2.0,odc-by,"
+    "cdla-permissive-1.0,cdla-permissive-2.0"
+)
 
 
 def get(url):
@@ -42,7 +45,8 @@ def main():
     licence = licence[0] if isinstance(licence, list) else licence
     sha = info["sha"]
     print(
-        f"{a.corpus}: {a.repo} @ {sha[:10]}, licence {licence!r}, gated {info.get('gated')}, private {info.get('private')}"
+        f"{a.corpus}: {a.repo} @ {sha[:10]}, licence {licence!r}, "
+        f"gated {info.get('gated')}, private {info.get('private')}"
     )
     if info.get("gated") or info.get("private"):
         print(f"{a.corpus}: gated or private; no manifest written", file=sys.stderr)

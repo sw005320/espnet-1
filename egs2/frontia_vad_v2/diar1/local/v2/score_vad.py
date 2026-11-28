@@ -17,10 +17,10 @@ and offset 448 samples (0.028 s) give it the interval [128 i + 384, 128 i + 512)
 which ends at the window's last sample, so no frame is due before all its
 samples have been read (latency 0 at look-ahead 0). Until 2026-11-18 the default
 offset was 256 samples, the window centre, which dated each decision 12 ms
-before its last sample. --shift and --offset (seconds) set them for other models. md-eval.pl -c 0 (--collar; --single_speaker_regions adds
--1) scores them against the set's rttm over each
-whole recording (a UEM from utt2num_samples), or over the regions of --uem
-(DIHARD style; recordings it does not list are scored whole). Writes
+before its last sample. --shift and --offset (seconds) set them for other models.
+md-eval.pl -c 0 (--collar; --single_speaker_regions adds -1) scores them against the
+set's rttm over each whole recording (a UEM from utt2num_samples), or over the regions
+of --uem (DIHARD style; recordings it does not list are scored whole). Writes
 result_th<T>_med<M>_collar<C>, as scripts/utils/score_der.sh names them.
 Recording ids with dots get underscores for md-eval, which cuts UEM names
 at the first dot.
@@ -28,8 +28,8 @@ at the first dot.
 summarize: for each exp directory, the (threshold, median) with the lowest
 detection error on --tune_set is applied to every set (and each set's own
 best is reported next to it); detection error = (missed + false alarm
-speech) / reference speech (--metric: read_md_eval). Writes one csv row per exp and set, and prints
-the macro average over the sets and the average weighted by speech hours.
+speech) / reference speech (--metric: read_md_eval). Writes one csv row per exp and set,
+and prints the macro average over the sets and the average weighted by speech hours.
 """
 
 import argparse

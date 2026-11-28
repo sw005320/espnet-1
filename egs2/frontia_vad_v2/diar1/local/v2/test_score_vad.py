@@ -11,7 +11,8 @@ import score_vad  # noqa: E402
 
 
 def test_frame_interval_ends_at_window_end():
-    # frame i reads samples [128 i, 128 i + 512); its scored interval ends at 128 i + 512
+    # frame i reads samples [128 i, 128 i + 512); its scored interval ends at
+    # 128 i + 512
     for i in (0, 1, 7, 100):
         prob = np.zeros(i + 3, dtype=np.float32)
         prob[i] = 1.0

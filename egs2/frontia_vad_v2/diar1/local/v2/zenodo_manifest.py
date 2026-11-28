@@ -38,7 +38,8 @@ def main():
         rec = json.load(r)
     licence = (rec.get("metadata", {}).get("license") or {}).get("id", "")
     print(
-        f"{a.corpus}: record {a.record} {rec['metadata'].get('title', '')!r}, licence {licence!r}"
+        f"{a.corpus}: record {a.record} {rec['metadata'].get('title', '')!r}, "
+        f"licence {licence!r}"
     )
     if licence.lower() not in a.licences.split(","):
         print(

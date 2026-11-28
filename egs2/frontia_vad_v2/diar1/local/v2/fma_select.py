@@ -13,8 +13,8 @@ A track is accepted when its licence is CC BY (1.0-4.0), CC0 or the Public Domai
 Domain / Sound Recording Common Law Protection" (the composition is public domain, the
 recording is not), and none of its copyright notes names a more restrictive licence (NC,
 ND, SA, Sampling+): e.g. WFMU tracks labelled CC BY 4.0 whose copyright reads "by-nc-sa
-3.0 US" are dropped. NC, ND, SA, Sampling+, the Free Art License and unknown licences are
-dropped. Singing is speech: may_have_vocals = 0 only for genre_top "Instrumental", a
+3.0 US" are dropped. NC, ND, SA, Sampling+, the Free Art License and unknown licences
+are dropped. Singing is speech: may_have_vocals = 0 only for genre_top "Instrumental", a
 track tag naming instrumental music, or the uploader's instrumental flag.
 
 With --full_zip_url, the size and CRC32 of each accepted track in fma_full.zip are read
@@ -117,7 +117,8 @@ def main():
     with a.out.open("w") as f:
         f.write(
             "track_id\tmember\taccepted\treason\tlicence\tlicence_class\tlicence_url\t"
-            "copyright_c\tcopyright_p\tgenre_top\tmay_have_vocals\tduration_s\tsize_bytes\t"
+            "copyright_c\tcopyright_p\tgenre_top\tmay_have_vocals\tduration_s\t"
+            "size_bytes\t"
             "crc32\tartist\ttitle\turl\n"
         )
         for t in tracks(a.meta_zip):

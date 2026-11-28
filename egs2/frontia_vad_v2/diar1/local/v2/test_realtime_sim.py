@@ -14,9 +14,9 @@ FS = rs.FS
 
 
 class ToyStream(rs.StreamingSystem):
-    """Frames of 160 samples; frame i is the sum of the samples up to its end + look-ahead
-    and is returned as soon as those samples are in (early=True: one frame before its
-    samples are in, a system that dates a decision too early)."""
+    """Frames of 160 samples; frame i is the sum of the samples up to its
+    end + look-ahead and is returned as soon as those samples are in (early=True: one
+    frame before its samples are in, a system that dates a decision too early)."""
 
     shift, offset = 160 / FS, 80 / FS
 
@@ -70,8 +70,8 @@ def test_a_frame_returned_before_its_audio_is_refused():
 
 
 class ToyOffline:
-    """Offline model of 160-sample frames that reads `look_ahead` samples past each frame
-    (zero padding at the end) and `context` samples before it."""
+    """Offline model of 160-sample frames that reads `look_ahead` samples past each
+    frame (zero padding at the end) and `context` samples before it."""
 
     def __init__(self, look_ahead, context=480):
         self.look_ahead, self.context = look_ahead, context
@@ -108,7 +108,8 @@ def test_windowed_is_causal_and_batched_equals_sequential(look_ahead):
     assert lat.min() >= -1e-12 and lat.max() <= 0.1 + 1e-12
     full = ToyOffline(look_ahead)([wav])[0][: len(seq)]
     if look_ahead == 0:
-        # a causal model with a receptive field inside the window gives its offline output
+        # a causal model whose receptive field fits in the window gives its
+        # offline output
         assert np.allclose(seq, full, rtol=1e-5, atol=1e-4)
     else:
         # a model that reads ahead sees zeros instead of the audio not yet arrived

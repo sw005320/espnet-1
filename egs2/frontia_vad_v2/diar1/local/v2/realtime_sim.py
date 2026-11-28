@@ -1,31 +1,34 @@
 #!/usr/bin/env python3
-"""Real-time simulation of a VAD: audio arrives in blocks, decisions are final at block end.
+"""Real-time VAD simulation: audio arrives in blocks, decisions are final at block end.
 
     python3 local/v2/realtime_sim.py --system <name> --block_ms 20 --out <dir> \
         --sets dump/raw/<set> ... [--task 1 --ntasks 1] [--window_s 2] [--limit_hours H]
 
 A system gets a recording's samples in time order, b samples at a time. After block k it
-may return the probabilities of frames whose interval ends by the block's end, using only
-the samples it has been given; those decisions are final. simulate() feeds the blocks,
-dates every returned frame with its emission time (the block end) and checks that no frame
-is dated after the audio the system had: a frame interval [offset + (i - 0.5) shift,
-offset + (i + 0.5) shift) must end by the emission time (CausalityError otherwise). The
-latency of a frame is its emission time minus the end of its interval, between 0 and b.
+may return the probabilities of frames whose interval ends by the block's end, using
+only the samples it has been given; those decisions are final. simulate() feeds the
+blocks, dates every returned frame with its emission time (the block end) and checks
+that no frame is dated after the audio the system had: a frame interval
+[offset + (i - 0.5) shift, offset + (i + 0.5) shift) must end by the emission time
+(CausalityError otherwise). The latency of a frame is its emission time minus the end of
+its interval, between 0 and b.
 
 Two kinds of systems:
-- streaming (StreamingSystem): keeps its own state, returns the frames that the new samples
-  complete; ours at look-ahead 0 (the TCN encoder's forward_streaming, frames dated at their
-  window end), Silero (its stateful 512-sample call), WebRTC (480-sample frames);
-- windowed (WindowedOffline): an offline model rerun at each block end on the last W seconds
-  (start aligned to the model's hop), keeping only the frames that end in the new block;
-  MarbleNet here. Its probabilities are computed for all block ends of a recording in
-  batches (windowed_probs), which gives the same result as feeding the blocks one by one
-  (tested), since each window holds only audio up to its block end.
+- streaming (StreamingSystem): keeps its own state, returns the frames that the new
+  samples complete; ours at look-ahead 0 (the TCN encoder's forward_streaming, frames
+  dated at their window end), Silero (its stateful 512-sample call), WebRTC (480-sample
+  frames);
+- windowed (WindowedOffline): an offline model rerun at each block end on the last W
+  seconds (start aligned to the model's hop), keeping only the frames that end in the
+  new block; MarbleNet here. Its probabilities are computed for all block ends of a
+  recording in batches (windowed_probs), which gives the same result as feeding the
+  blocks one by one (tested), since each window holds only audio up to its block end.
 
-Writes <out>/<system>/diar_eval/diarized_<set>/predictions/<rec>.npy and diarize.<task>.scp
-(the layout of local/v2/vad_infer.py), <out>/<system>/frames.json (shift and offset, for
-local/v2/score_vad.py --shift --offset; "latency_ms": the block) and latency.<task>.tsv
-(per recording: frames, largest latency in ms, seconds of audio, seconds of compute).
+Writes <out>/<system>/diar_eval/diarized_<set>/predictions/<rec>.npy and
+diarize.<task>.scp (the layout of local/v2/vad_infer.py), <out>/<system>/frames.json
+(shift and offset, for local/v2/score_vad.py --shift --offset; "latency_ms": the block)
+and latency.<task>.tsv (per recording: frames, largest latency in ms, seconds of audio,
+seconds of compute).
 """
 
 import argparse
@@ -78,8 +81,8 @@ def simulate(system: StreamingSystem, wav: np.ndarray, block: int):
         last_end = frame_end(first + len(out) - 1, system.shift, system.offset)
         if len(out) and last_end > t + 0.5 / FS:
             raise CausalityError(
-                f"frame {first + len(out) - 1} ends at {last_end:.4f} s but was returned "
-                f"at {t:.4f} s, when the system had audio up to {t:.4f} s only"
+                f"frame {first + len(out) - 1} ends at {last_end:.4f} s but was "
+                f"returned at {t:.4f} s, when the system had audio up to {t:.4f} s only"
             )
         probs.extend(out.tolist())
         emit.extend([t] * len(out))
@@ -123,8 +126,9 @@ class WindowedOffline(StreamingSystem):
         g0 = s // self.hop
         if g0 > self.emitted:
             raise ValueError(
-                f"the window starts at frame {g0}, after frame {self.emitted}, the first "
-                "one not yet returned: the window must be longer than the block"
+                f"the window starts at frame {g0}, after frame {self.emitted}, "
+                "the first one not yet returned: the window must be longer than "
+                "the block"
             )
         ends = frame_end(g0 + np.arange(len(p)), self.shift, self.offset)
         last = int(np.searchsorted(ends, t / FS + 0.5 / FS, side="right")) - 1 + g0
@@ -134,7 +138,7 @@ class WindowedOffline(StreamingSystem):
 
 
 def windowed_probs(sys_: WindowedOffline, wav: np.ndarray, block: int, batch: int = 64):
-    """simulate(sys_, wav, block) computed with the windows of equal length in batches."""
+    """simulate(sys_, wav, block) computed with equal windows in batches."""
     n = len(wav)
     ends = list(range(block, n, block)) + [n]
     starts = [max(0, (t - sys_.window) // sys_.hop * sys_.hop) for t in ends]
@@ -163,8 +167,9 @@ class OursStream(StreamingSystem):
 
     Frame i of the STFT (512-sample window every 128 samples, not centred) reads samples
     [128 i, 128 i + 512) and is dated by the 8 ms interval ending at its last sample
-    (local/v2/score_vad.py's default). Only the new frames are computed: frontend, global
-    MVN and the linear decoder work per frame, the encoder keeps its convolution state.
+    (local/v2/score_vad.py's default). Only the new frames are computed: frontend,
+    global MVN and the linear decoder work per frame, the encoder keeps its convolution
+    state.
     """
 
     shift, offset = 128 / FS, 448 / FS
@@ -249,7 +254,7 @@ class SileroStream(StreamingSystem):
 
 
 class WebRTCStream(StreamingSystem):
-    """WebRTC VAD (aggressiveness 0) on 480-sample frames, a new detector per recording."""
+    """WebRTC VAD (aggressiveness 0), 480-sample frames, one detector per recording."""
 
     shift, offset = 480 / FS, 240 / FS
 
@@ -414,7 +419,8 @@ def main(extra_systems: Optional[dict] = None):
         "set\trecording\tframes\tmax_latency_ms\taudio_s\tcompute_s\n" + "".join(rows)
     )
     print(
-        f"{name} task {a.task}/{a.ntasks}: {len(rows)} recordings, {audio_s / 3600:.2f} h "
+        f"{name} task {a.task}/{a.ntasks}: {len(rows)} recordings, "
+        f"{audio_s / 3600:.2f} h "
         f"in {compute_s:.0f} s (RTF {compute_s / max(audio_s, 1e-9):.5f}), block "
         f"{a.block_ms} ms"
     )

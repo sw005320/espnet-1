@@ -174,7 +174,9 @@ def test_licence_class_ignores_titles(text, cls):
 
 # music/jamendo/LICENSE, the block of music-jamendo-0047 .. 0055 (id lines with
 # trailing spaces as in the file); its title line was taken as the licence before
-JAMENDO_BLOCK = """==============================================================================
+JAMENDO_BLOCK = (
+    "=" * 78
+    + """
 music-jamendo-0048
 Andromeda
 music-jamendo-0049
@@ -202,6 +204,7 @@ Other
 Attribution 3.0 Unported (CC BY 3.0)
 https://www.jamendo.com/en/list/a1/other
 """
+)
 
 
 def test_most_restrictive_line_of_a_block_wins(tmp_path):

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Pools of the v2.3 rotating banks from OpenNoise v0.1's training lists.
 
-    python3 local/v2/opennoise_banks.py --lists <OpenNoise data/lists> --out data/opennoise_v01 \
+    python3 local/v2/opennoise_banks.py --lists <OpenNoise data/lists> \
+        --out data/opennoise_v01 \
         [--keep_babble_routed_noise]
 
 OpenNoise writes, per kind (noise, music, rir, babble, human_nonspeech) and split,
@@ -10,19 +11,19 @@ about 300 s of one source) and <kind>_<split>_manifest.tsv, one row per piece: e
 start_s, end_s, kind, source, split, duration_s, spdx, licence_class, speech_flag,
 vocal_flag, speech_check, and the credit columns. From the train split this writes:
 
-- noise_pool.tsv (packs of kind noise), noise_babble_pool.tsv (noise and babble packs) and
-  music_pool.tsv: one row per pack (id, path, kind, source, licence = the SPDX ids of its
-  pieces joined by "+", duration_s = its last piece's end, flagged = any piece with
-  speech_flag or vocal_flag, babble packs always 1), the input of BatchWavAugment's
+- noise_pool.tsv (packs of kind noise), noise_babble_pool.tsv (noise and babble packs)
+  and music_pool.tsv: one row per pack (id, path, kind, source, licence = the SPDX ids
+  of its pieces joined by "+", duration_s = its last piece's end, flagged = any piece
+  with speech_flag or vocal_flag, babble packs always 1), the input of BatchWavAugment's
   noise_pool / music_pool (espnet2.layers.rotating_bank.Pool);
 - rir.scp: every impulse response (a small bank, loaded whole);
 - pool_counts.tsv: packs, pieces and hours per pool by licence and by flag.
 
-It stops when a noise or music piece is flagged as speech or vocals, when a licence class is
-outside PD/CC0, BY, permissive and accepted, or when an scp entry has no manifest row (or
-the reverse). Noise packs routed from babble candidates (a piece whose speech_check starts
-with "noise ratio=": crowd recordings that passed the speech screen) are left out unless
---keep_babble_routed_noise.
+It stops when a noise or music piece is flagged as speech or vocals, when a licence
+class is outside PD/CC0, BY, permissive and accepted, or when an scp entry has no
+manifest row (or the reverse). Noise packs routed from babble candidates (a piece whose
+speech_check starts with "noise ratio=": crowd recordings that passed the speech screen)
+are left out unless --keep_babble_routed_noise.
 """
 
 import argparse
