@@ -1,23 +1,34 @@
 #!/usr/bin/env python3
-"""Find where a podcast episode's conversation ends, to cut the outro after it.
+"""Find the parts of podcast episodes that the show's licence may not cover.
 
     python3 local/v2/podcast_trim.py --root ${VAD_CORPORA} --corpus ipse_dixit \
-        --out local/v2/downloads/ipse_dixit.trim.tsv
+        --mode outro --out local/v2/downloads/ipse_dixit.trim.tsv
+    python3 local/v2/podcast_trim.py --root ${VAD_CORPORA} --corpus astronomy_cast \
+        --mode ads --out local/v2/downloads/astronomy_cast.trim.tsv
 
-Some podcasts close every episode with a clip of someone else's recording (Ipse
-Dixit: an old song or radio sketch, 1-3 min) that the show's licence does not
-cover. This transcribes the last --tail seconds of each episode with OWSM-CTC
-in 30 s windows (hop --hop s) and takes the last window whose text has a
-sign-off phrase ("thanks for having me", ...). The conversation is kept up to
-that window's start, so a few seconds of speech may be lost, but none of the
-outro is kept.
+Both modes transcribe with OWSM-CTC in 30 s windows and write the intervals of
+each file to keep.
 
+--mode outro: some podcasts close every episode with a clip of someone else's
+recording (Ipse Dixit: an old song or radio sketch, 1-3 min). The last --tail
+seconds are transcribed (hop --hop s) and the last window whose text has a
+sign-off phrase ("thanks for having me", ...) ends the kept part, at that
+window's start: a few seconds of speech may be lost, none of the outro is kept.
 An episode is flagged, and kept only up to --fallback seconds before its end,
 when no window has a sign-off or the sign-off is less than --min_outro seconds
 from the end (the outro is then probably a song whose words matched).
 
-Output columns: relative_path, duration (s), keep_end (s), method (signoff or
-fallback), the matched text. The adapter keeps [0, keep_end) of each file.
+--mode ads: some podcasts have host-read sponsor messages (Astronomy Cast in its
+sponsored years). The whole episode is transcribed (hop --hop s); every window
+whose text has a sponsor phrase ("brought to you by", "promo code", "dot com
+slash", ...) is dropped whole, and drops less than --merge_gap seconds apart
+are joined. A window is 30 s, so each drop has up to 30 s of margin around the
+phrase. A phrase within 30 characters of a match of --own (the show's Patreon,
+its own website) belongs to the show's own announcements and is kept.
+
+Output columns: relative_path, duration (s), keep (start-end intervals in
+seconds, joined by ";"), method, matched text. The adapter keeps only the listed
+intervals of each file.
 """
 
 import argparse
@@ -36,8 +47,26 @@ SIGNOFF = re.compile(
     r"look forward|best of luck|good luck|take care|thanks for (coming|joining|being))",
     re.I,
 )
+SPONSOR = re.compile(
+    r"(brought to you by|sponsored by|is sponsored|our sponsors?\b|promo code|"
+    r"offer code|use (the )?code|coupon|\.com ?slash|dot com slash|percent off|"
+    r"dollars off|free trial|for more information visit|thanks to our sponsor)",
+    re.I,
+)
 SR = 16000
 WIN = 30
+
+
+def sponsor(text, own):
+    """The first sponsor phrase in text with no match of `own` within 30 characters.
+
+    `own` matches the show's own announcements (its Patreon, its website), which
+    use the same phrases as sponsor messages but are part of the show.
+    """
+    for m in SPONSOR.finditer(text):
+        if not own.search(text[max(0, m.start() - 30) : m.end() + 30]):
+            return m
+    return None
 
 
 def load(path):
@@ -52,20 +81,85 @@ def load(path):
     return wav.numpy()
 
 
+def windows(s2t, wav, start, hop):
+    """(start time, text) of 30 s windows from `start` to the end, `hop` s apart."""
+    dur = len(wav) / SR
+    t = start
+    while t < dur - 1:
+        # int() of both ends can give WIN * SR + 1 samples
+        seg = wav[int(t * SR) :][: WIN * SR]
+        seg = np.pad(seg, (0, WIN * SR - len(seg)))
+        with torch.no_grad():
+            text = s2t.best_path(seg)[0][0]
+        yield t, re.sub(r"<[^>]+>", "", text).strip()
+        t += hop
+
+
+def snippet(text, m):
+    return text[max(0, m.start() - 40) : m.end() + 40].replace("\t", " ")
+
+
+def outro(s2t, wav, a):
+    dur = len(wav) / SR
+    last = None
+    for t, text in windows(s2t, wav, max(0.0, dur - a.tail), a.hop):
+        m = SIGNOFF.search(text)
+        if m:
+            last = (t, snippet(text, m))
+    if last is not None and dur - last[0] >= a.min_outro:
+        return [(0.0, last[0])], "signoff", last[1]
+    note = "no sign-off" if last is None else f"sign-off too late: {last[1]}"
+    return [(0.0, max(0.0, dur - a.fallback))], "fallback", note
+
+
+def ads(s2t, wav, a):
+    dur = len(wav) / SR
+    drops, notes = [], []
+    for t, text in windows(s2t, wav, 0.0, a.hop):
+        m = sponsor(text, a.own)
+        if not m:
+            continue
+        s, e = t, min(t + WIN, dur)
+        if drops and s - drops[-1][1] < a.merge_gap:
+            drops[-1] = (drops[-1][0], e)
+        else:
+            drops.append((s, e))
+        notes.append(f"{t:.0f}s: {snippet(text, m)}")
+    keep, prev = [], 0.0
+    for s, e in drops:
+        if s > prev:
+            keep.append((prev, s))
+        prev = max(prev, e)
+    if prev < dur:
+        keep.append((prev, dur))
+    return keep, ("ads" if drops else "clean"), " | ".join(notes)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--root", required=True)
     ap.add_argument("--corpus", required=True)
+    ap.add_argument("--mode", choices=("outro", "ads"), required=True)
     ap.add_argument("--manifest", help="default: downloads/<corpus>.tsv")
     ap.add_argument("--out", required=True)
     ap.add_argument("--lang", default="<eng>")
+    ap.add_argument("--hop", type=float, default=None, help="outro 10, ads 15")
     ap.add_argument("--tail", type=float, default=420.0)
-    ap.add_argument("--hop", type=float, default=10.0)
     ap.add_argument("--min_outro", type=float, default=20.0)
     ap.add_argument("--fallback", type=float, default=240.0)
+    ap.add_argument("--merge_gap", type=float, default=30.0)
+    ap.add_argument(
+        "--own",
+        default=r"patreon|brought to you by you\b",
+        help="regex of the show's own announcements; sponsor phrases near it are kept",
+    )
     ap.add_argument("--model_tag", default="espnet/owsm_ctc_v4_1B")
     ap.add_argument("--revision", default="6075bf3d42e6037d1ef7abd7c5558ade886e6eaa")
     a = ap.parse_args()
+    if a.hop is None:
+        a.hop = 10.0 if a.mode == "outro" else 15.0
+    own_pattern = a.own
+    a.own = re.compile(a.own, re.I)
 
     from align import absolute_config, model_files
 
@@ -89,42 +183,32 @@ def main():
         lang_sym=a.lang,
         task_sym="<asr>",
     )
-    rows, flagged = [], 0
+    run = outro if a.mode == "outro" else ads
+    rows, counts = [], {}
     for n, rel in enumerate(rels):
         wav = load(Path(a.root) / a.corpus / rel)
         dur = len(wav) / SR
-        start = max(0.0, dur - a.tail)
-        last = None
-        t = start
-        while t < dur - 1:
-            seg = wav[int(t * SR) : int((t + WIN) * SR)]
-            seg = np.pad(seg, (0, WIN * SR - len(seg)))
-            with torch.no_grad():
-                text = s2t.best_path(seg)[0][0]
-            text = re.sub(r"<[^>]+>", "", text).strip()
-            m = SIGNOFF.search(text)
-            if m:
-                last = (t, text[max(0, m.start() - 40) : m.end() + 40])
-            t += a.hop
-        if last is not None and dur - last[0] >= a.min_outro:
-            keep, method, note = last[0], "signoff", last[1]
-        else:
-            keep, method = max(0.0, dur - a.fallback), "fallback"
-            note = "no sign-off" if last is None else f"sign-off too late: {last[1]}"
-            flagged += 1
-        note = note.replace("\t", " ").replace("\n", " ")
-        rows.append(f"{rel}\t{dur:.2f}\t{keep:.2f}\t{method}\t{note}\n")
+        keep, method, note = run(s2t, wav, a)
+        counts[method] = counts.get(method, 0) + 1
+        kept = sum(e - s for s, e in keep)
+        spans = ";".join(f"{s:.2f}-{e:.2f}" for s, e in keep)
+        rows.append(f"{rel}\t{dur:.2f}\t{spans}\t{method}\t{note}\n")
         print(
-            f"[{n + 1}/{len(rels)}] {rel} {dur:.0f} s keep {keep:.0f} s {method}",
+            f"[{n + 1}/{len(rels)}] {rel} {dur:.0f} s, kept {kept:.0f} s, {method}",
             flush=True,
         )
-    out.write_text(
-        "# relative_path\tduration\tkeep_end\tmethod\tmatched_text\n"
-        f"# podcast_trim.py --corpus {a.corpus} --tail {a.tail} --hop {a.hop} "
-        f"--min_outro {a.min_outro} --fallback {a.fallback} ({a.model_tag}@{a.revision[:8]})\n"
-        + "".join(rows)
+    opts = f"--mode {a.mode} --hop {a.hop}"
+    opts += (
+        f" --tail {a.tail} --min_outro {a.min_outro} --fallback {a.fallback}"
+        if a.mode == "outro"
+        else f" --merge_gap {a.merge_gap} --own '{own_pattern}'"
     )
-    print(f"{len(rows)} episodes, {flagged} flagged (fallback)")
+    out.write_text(
+        "# relative_path\tduration\tkeep\tmethod\tmatched_text\n"
+        f"# podcast_trim.py --corpus {a.corpus} {opts} "
+        f"({a.model_tag}@{a.revision[:8]})\n" + "".join(rows)
+    )
+    print(f"{len(rows)} episodes: {counts}")
 
 
 if __name__ == "__main__":
