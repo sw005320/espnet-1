@@ -41,6 +41,12 @@ CHiME-6 was used as released on OpenSLR (SLR150), under CC BY-SA 4.0
 Hugging Face (`chimechallenge/chime6`), but the v1 models were trained on the
 CC BY-SA release.
 
+AMI and ICSI are prepared from every audio file of a meeting, so a copy that is
+still being downloaded would give fewer channels without an error.
+`local/prep_ami.py` and `local/prep_icsi.py` therefore stop when a file listed in
+`local/ami_audio_files.txt` or `local/icsi_audio_files.txt` (a complete copy) is
+missing; `--allow_missing` only warns.
+
 Noise for on-the-fly augmentation (`data/noise.scp`, SNR -5 to 20 dB):
 
 | corpus | `db.sh` | licence | part used |

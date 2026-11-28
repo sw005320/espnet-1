@@ -7,6 +7,10 @@ recording labelled with the union of all participants' segments from the NXT
 annotations (Segments/<meeting>.<participant>.segs.xml). The split follows
 the ICSI partition of lhotse (recipes/icsi.py, lhotse 1.33.0), listed in
 local/icsi_split_{train,dev,eval}.txt.
+
+Every audio file that local/icsi_audio_files.txt lists for the split's meetings
+must be present: preparing data from a copy that is still being downloaded
+would drop channels without notice.
 """
 
 import argparse
@@ -16,6 +20,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from vad_data_utils import (
+    check_expected_files,
     clip_intervals,
     iter_annotation_files,
     merge_intervals,
@@ -57,12 +62,26 @@ def main():
     parser.add_argument(
         "--sph2pipe", default="sph2pipe", help="sph2pipe command written to wav.scp"
     )
+    parser.add_argument(
+        "--expected_files",
+        type=Path,
+        default=Path(__file__).resolve().parent / "icsi_audio_files.txt",
+        help="audio files of a complete copy, relative to icsi_root",
+    )
+    parser.add_argument(
+        "--allow_missing",
+        action="store_true",
+        help="only warn when a file of --expected_files is missing",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     args.icsi_root = args.icsi_root.resolve()
 
     segments = read_segments(args.annotations)
     meetings = args.meeting_list.read_text().split()
+    check_expected_files(
+        args.icsi_root, meetings, args.expected_files, args.allow_missing
+    )
     recordings, speech, skipped = {}, {}, []
     for meeting in meetings:
         if meeting not in segments:
